@@ -178,7 +178,11 @@ func (c Client) Start(ctx context.Context, id string) error {
 
 // Attach connects streams to an existing container process. Docker owns terminal
 // setup and the Ctrl-P, Ctrl-Q detach sequence. Attachment never starts a container.
-func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer) (result error) {
+func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return attach(ctx, id, stdin, stdout, stderr, []string{"container", "attach", "--detach-keys=ctrl-p,ctrl-q", "--sig-proxy=false", "--", id})
+}
+
+func attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer, args []string) (result error) {
 	if err := validateArgument("container ID or name", id); err != nil {
 		return err
 	}
@@ -199,7 +203,7 @@ func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, st
 			}
 		}()
 	}
-	cmd := exec.CommandContext(ctx, "docker", "container", "attach", "--detach-keys=ctrl-p,ctrl-q", "--sig-proxy=false", "--", id)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {

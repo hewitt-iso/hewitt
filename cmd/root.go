@@ -13,7 +13,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
-		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image.\nThe ps command lists saved sessions without requiring Docker; attach connects\nto a running container terminal.\nClaude/Codex adapters and subscription login use persistent native profiles.\nWorktrees, terminal multiplexing, and the other session commands are not implemented yet.",
+		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image.\nThe ps command lists saved sessions without requiring Docker; attach connects\nto a running container terminal.\nClaude/Codex adapters and subscription login use persistent native profiles.\nRun uses persistent tmux terminals and supports --detach.\nWorktrees and the other session commands are not implemented yet.",
 		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,

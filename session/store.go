@@ -20,6 +20,7 @@ import (
 // IDs are full Docker container IDs until sessions have independent resources.
 // Credentials and agent input must never be stored here.
 type Metadata struct {
+	Terminal  string    `json:"terminal,omitempty"`
 	Profile   string    `json:"profile,omitempty"`
 	Operation string    `json:"operation,omitempty"`
 	ID        string    `json:"id"`
@@ -221,6 +222,9 @@ func validateID(id string) error {
 }
 
 func (m Metadata) validate() error {
+	if m.Terminal != "" && m.Terminal != "tmux" {
+		return fmt.Errorf("unsupported session terminal %q", m.Terminal)
+	}
 	if m.Profile != "" {
 		if err := profile.ValidateID(m.Profile); err != nil {
 			return err
