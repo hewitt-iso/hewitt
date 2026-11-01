@@ -4,13 +4,13 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -33,6 +33,7 @@ type CreateOptions struct {
 	User        string
 	Workdir     string
 	DisableLogs bool
+	DisableTTY  bool
 }
 
 // BindMount grants access to one explicitly selected host directory.
@@ -92,11 +93,13 @@ func (c Client) Create(ctx context.Context, opts CreateOptions) (string, error) 
 	args := []string{
 		"container", "create",
 		"--pull", "missing",
-		"--init", "--interactive", "--tty",
-		"--label", "io.hewitt.managed=true",
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges=true",
+		"--init", "--interactive",
 	}
+	if !opts.DisableTTY {
+		args = append(args, "--tty")
+	}
+	args = append(args, "--label", "io.hewitt.managed=true",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges=true")
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
 	}
@@ -149,16 +152,23 @@ func (c Client) StartAttached(ctx context.Context, id string, in io.Reader, out,
 		}
 		return fmt.Errorf("attached container %q (container preserved): %w", id, err)
 	}
-	result, err := c.execute(ctx, "container", "wait", "--", id)
+	// Inspect instead of waiting: detach must return while the container is alive.
+	result, err := c.execute(ctx, "container", "inspect", "--format", "{{json .State}}", "--", id)
 	if err != nil {
-		return fmt.Errorf("wait for container %q (container preserved): %w", id, err)
+		return fmt.Errorf("inspect container %q (container preserved): %w", id, err)
 	}
-	code, err := strconv.Atoi(strings.TrimSpace(result))
-	if err != nil || code < 0 {
-		return fmt.Errorf("container %q returned invalid exit status (container preserved)", id)
+	var state struct {
+		Status   string
+		ExitCode int
 	}
-	if code != 0 {
-		return fmt.Errorf("container %q exited with status %d (container preserved)", id, code)
+	if err := json.Unmarshal([]byte(result), &state); err != nil || state.Status == "" {
+		return fmt.Errorf("container %q returned invalid state (container preserved)", id)
+	}
+	if state.Status != "exited" {
+		return fmt.Errorf("detached from container %q (state %s); authentication completion not confirmed; reconnect with docker attach %s", id, state.Status, id)
+	}
+	if state.ExitCode != 0 {
+		return fmt.Errorf("container %q exited with status %d (container preserved)", id, state.ExitCode)
 	}
 	return nil
 }

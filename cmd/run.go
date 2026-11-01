@@ -12,19 +12,27 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	var image, name, profile, repository, base string
 	var detach bool
 	short := "Start an agent container with a persistent native profile"
-	if action == "login" {
+	exampleAction := action
+	switch action {
+	case "login":
 		short = "Log in to a subscription using the native agent in a container"
+	case "status":
+		short = "Show native authentication status for a profile"
+		exampleAction = "auth status"
+	case "logout":
+		short = "Log out a shared profile using the native agent"
+		exampleAction = "auth logout"
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nDo not use one profile concurrently. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
-		Example:   "  hewitt " + action + " codex --image my-codex:local --profile personal",
+		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
+		Example:   "  hewitt " + exampleAction + " codex --image hewitt/codex:local --profile personal",
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := session.AgentOptions{Agent: args[0], Image: image, Name: name, Profile: profile, DataDir: cfg.DataDir, Repository: repository, Base: base}
-			if action == "login" {
-				return session.Login(cmd.Context(), opts, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			if action != "run" {
+				return session.Authenticate(cmd.Context(), opts, action, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			}
 			id, err := session.RunAgent(cmd.Context(), opts)
 			if err != nil {

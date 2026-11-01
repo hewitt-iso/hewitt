@@ -24,7 +24,7 @@ printf '%s\n' "$@" >> "$HEWITT_CALLS"
 case "$2" in
 create) printf '%s\n' '` + adapterTestID + `' ;;
 start) if [ "$3" = "--attach" ]; then printf 'native login prompt'; fi ;;
-wait) printf '0\n' ;;
+inspect) printf '%s\n' '{"Status":"exited","ExitCode":0}' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o700); err != nil {

@@ -21,7 +21,7 @@ type AgentOptions struct {
 
 // RunAgent creates and starts a detached native agent with its persistent profile.
 func RunAgent(ctx context.Context, opts AgentOptions) (string, error) {
-	create, err := prepare(ctx, opts, false)
+	create, err := prepare(ctx, opts, "run")
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +55,16 @@ func RunAgent(ctx context.Context, opts AgentOptions) (string, error) {
 // Returning nil means its login process exited successfully, not a separate
 // Hewitt verification of the subscription or entitlement.
 func Login(ctx context.Context, opts AgentOptions, in io.Reader, out, stderr io.Writer) error {
-	create, err := prepare(ctx, opts, true)
+	return Authenticate(ctx, opts, "login", in, out, stderr)
+}
+
+// Authenticate delegates credential operations to the native client.
+// It preserves both the profile and the operation container.
+func Authenticate(ctx context.Context, opts AgentOptions, operation string, in io.Reader, out, stderr io.Writer) error {
+	if operation != "login" && operation != "status" && operation != "logout" {
+		return fmt.Errorf("unsupported authentication operation %q", operation)
+	}
+	create, err := prepare(ctx, opts, operation)
 	if err != nil {
 		return err
 	}
@@ -63,18 +72,18 @@ func Login(ctx context.Context, opts AgentOptions, in io.Reader, out, stderr io.
 	if err != nil {
 		return err
 	}
-	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "login", "")
+	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, operation, "")
 	if err != nil {
 		return err
 	}
 	id := metadata.ID
-	if _, err := fmt.Fprintf(stderr, "Login container: %s (preserved; remove with docker rm after exit)\n", id); err != nil {
+	if _, err := fmt.Fprintf(stderr, "Authentication container: %s (preserved; remove with docker rm after exit)\n", id); err != nil {
 		return fmt.Errorf("report login container %q: %w", id, err)
 	}
 	return (docker.Client{}).StartAttached(ctx, id, in, out, stderr)
 }
 
-func prepare(ctx context.Context, opts AgentOptions, login bool) (docker.CreateOptions, error) {
+func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.CreateOptions, error) {
 	if err := ctx.Err(); err != nil {
 		return docker.CreateOptions{}, err
 	}
@@ -83,13 +92,19 @@ func prepare(ctx context.Context, opts AgentOptions, login bool) (docker.CreateO
 		return docker.CreateOptions{}, err
 	}
 	inv := adapter.Run()
-	if login {
+	switch operation {
+	case "login":
 		inv = adapter.Login()
+	case "status":
+		inv = adapter.Status()
+	case "logout":
+		inv = adapter.Logout()
 	}
 	create := docker.CreateOptions{
 		Image: opts.Image, Name: opts.Name, Entrypoint: inv.Entrypoint,
 		Command: inv.Args, Env: inv.Env, Workdir: "/tmp",
-		DisableLogs: login,
+		DisableLogs: operation != "run",
+		DisableTTY:  operation == "status" || operation == "logout",
 		User:        fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 	}
 	if err := create.Validate(); err != nil {
