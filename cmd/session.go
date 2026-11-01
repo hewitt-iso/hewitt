@@ -10,14 +10,6 @@ import (
 func newSessionCommands() []*cobra.Command {
 	commands := []*cobra.Command{
 		{
-			Use:       "run <agent>",
-			Short:     "Start an agent in an isolated container and worktree",
-			Long:      "Start a coding agent with its own Docker container, Git worktree, and terminal session.\n\nPlanned agents: claude (Claude Code), codex (Codex), opencode (OpenCode).",
-			Example:   "  hewitt run claude\n  hewitt run codex\n  hewitt run opencode",
-			ValidArgs: []string{"claude", "codex", "opencode"},
-			Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
-		},
-		{
 			Use:     "ps",
 			Short:   "List sessions",
 			Example: "  hewitt ps",

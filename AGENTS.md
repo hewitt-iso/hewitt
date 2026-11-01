@@ -11,7 +11,10 @@ do not make separate API credits a prerequisite.
 - `main.go`: process entry point, version injection, exit status.
 - `cmd`: Cobra commands, argument validation, user-facing output.
 - `config`: configuration defaults, file loading, and validation.
-- Future session management coordinates container runtime, Git workspaces,
+- `docker`: container creation/startup through the Docker CLI, subprocess errors,
+  and cancellation. Callers own created containers; failed starts preserve them
+  and report their IDs. Do not silently remove containers after a failed start.
+- Future session management coordinates the Docker runtime, Git workspaces,
   agent adapters, and authentication. Add those packages only with working
   behavior; do not create empty packages or speculative interfaces.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace
@@ -41,14 +44,19 @@ do not make separate API credits a prerequisite.
   agent accounts, or the developer's real configuration.
 - Before finishing, run `make fmt`, `make check`, and `make build`. Add regression
   tests for behavioral fixes; keep future Docker integration tests opt-in.
+- Docker unit tests use a temporary fake executable on PATH. Real lifecycle tests
+  require `-tags=integration` and `HEWITT_TEST_IMAGE`; clean up only their own
+  containers. Never depend on a developer's daemon in ordinary unit tests.
 
 ## Isolation and credentials
 
 - Never commit tokens, login state, private keys, or session data. Config is for
   non-secret preferences, not credentials; redact secrets in diagnostics/logs.
-- Future containers must not receive the host Docker socket, broad home-directory
+- Containers must not receive the host Docker socket, broad home-directory
   mounts, or privileged mode by default. Treat worktree paths and agent input as
   untrusted; pass subprocess arguments directly instead of interpolating a shell.
+- Preserve dropped capabilities and `no-new-privileges` in container defaults.
+  Container creation must not imply that an agent is authenticated or ready.
 - Use official authentication flows. Do not copy host credential stores wholesale
   into images or worktrees. Restrict permissions on any future credential files.
 - Worktree/session cleanup must not discard unrelated or uncommitted user work.
