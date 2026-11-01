@@ -12,22 +12,27 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
-		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThis initial version provides CLI and configuration foundations. Session commands\nare not implemented yet.",
+		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nSession commands provide help and argument validation. Session execution is not\nimplemented yet.",
 		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// Validate configuration on normal invocation. Help and version bypass
-			// loading so they remain available even when configuration is broken.
-			if _, err := config.Load(configPath); err != nil {
-				return err
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Help/version flags bypass hooks; Cobra's help command does not.
+			// Keep both help forms available when configuration is broken.
+			if cmd.Name() == "help" {
+				return nil
 			}
+			_, err := config.Load(configPath)
+			return err
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
 	}
 	cmd.SetVersionTemplate("hewitt {{.Version}}\n")
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
+	cmd.AddCommand(newSessionCommands()...)
 	return cmd
 }
