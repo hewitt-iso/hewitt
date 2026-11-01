@@ -13,7 +13,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
-		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image.\nThe ps command lists saved sessions without requiring Docker. Agent setup,\nworktrees, terminal sessions, and the other session commands are not implemented yet.",
+		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image.\nThe ps command lists saved sessions without requiring Docker.\nClaude/Codex adapters and subscription login use persistent native profiles.\nWorktrees, reconnectable terminal sessions, and the other session commands are not implemented yet.",
 		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
@@ -24,8 +24,8 @@ func NewRootCommand(version string) *cobra.Command {
 			if cmd.Name() == "help" {
 				return nil
 			}
-			var err error
-			cfg, err = config.Load(configPath)
+			loaded, err := config.Load(configPath)
+			cfg = loaded
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -36,7 +36,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
 	cmd.AddCommand(newSessionCommands()...)
-	cmd.AddCommand(newRunCommand(&cfg))
+	cmd.AddCommand(newAgentCommand("run", &cfg), newAgentCommand("login", &cfg))
 	cmd.AddCommand(newPSCommand(&cfg))
 	return cmd
 }

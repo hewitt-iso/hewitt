@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,6 +13,48 @@ import (
 	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/session"
 )
+
+func TestLoginUsesSelectedConfigAndProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	data := filepath.Join(dir, "custom-data")
+	configPath := filepath.Join(dir, "config.json")
+	encoded, err := json.Marshal(map[string]string{"data_dir": data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+case "$2" in
+create) printf '%s\n' '` + containerID + `' ;;
+start) printf 'native login' ;;
+wait) printf '0\n' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	root := NewRootCommand("test")
+	root.SetOut(&out)
+	root.SetErr(&stderr)
+	root.SetIn(strings.NewReader(""))
+	root.SetArgs([]string{"login", "codex", "--config", configPath, "--image", "codex:test", "--profile", "work"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "native login" {
+		t.Fatalf("output %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(data, "profiles", "codex", "work", "codex")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), containerID) {
+		t.Fatalf("missing container ID: %q", stderr.String())
+	}
+}
 
 const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -51,7 +94,10 @@ func TestRun(t *testing.T) {
 				args = append(args, "--config", path)
 			}
 			if tt.blockedDir {
-				if err := os.WriteFile(dataDir, []byte("untouched"), 0o600); err != nil {
+				if err := os.MkdirAll(dataDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dataDir, "sessions"), []byte("untouched"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -90,7 +136,7 @@ printf '%s\n' '` + containerID + `'
 				t.Fatalf("Docker calls = %q, %v; want %q", got, err, tt.wantCalls)
 			}
 			if tt.blockedDir {
-				got, err := os.ReadFile(dataDir)
+				got, err := os.ReadFile(filepath.Join(dataDir, "sessions"))
 				if err != nil || string(got) != "untouched" {
 					t.Fatalf("metadata failure changed existing file: %q, %v", got, err)
 				}
@@ -127,6 +173,10 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		{args: []string{"run", "codex", "--image", ""}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image=--privileged"}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--name", "bad name"}, want: "container name must be nonempty"},
+		{args: []string{"run", "codex", "--image", "test", "--profile", "../escape"}, want: "profile must"},
+		{args: []string{"run", "opencode", "--image", "test"}, want: "no implemented adapter"},
+		{args: []string{"login", "codex"}, want: `required flag(s) "image"`},
+		{args: []string{"login", "claude", "--image", "test", "--profile", ""}, want: "profile must"},
 		{args: []string{"run", "codex", "--image", "test"}, want: "Docker CLI is installed"},
 	} {
 		out, err := executeCommand(t, tt.args...)
@@ -138,9 +188,12 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--image", "--name", "Examples:", "No host files or credentials are mounted"} {
+	for _, want := range []string{"--image", "--name", "Examples:", "no repository or host credentials are imported"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help = %q, want %q", out, want)
 		}
+	}
+	if _, err := executeCommand(t, "login", "--help", "--config", filepath.Join(home, "missing.json")); err != nil {
+		t.Fatalf("login help requires configuration: %v", err)
 	}
 }
