@@ -12,12 +12,16 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/hewitt-iso/hewitt/profile"
 )
 
 // Metadata records creation intent, not the container's current runtime state.
 // IDs are full Docker container IDs until sessions have independent resources.
 // Credentials and agent input must never be stored here.
 type Metadata struct {
+	Profile   string    `json:"profile,omitempty"`
+	Operation string    `json:"operation,omitempty"`
 	ID        string    `json:"id"`
 	Agent     string    `json:"agent"`
 	Image     string    `json:"image"`
@@ -217,6 +221,15 @@ func validateID(id string) error {
 }
 
 func (m Metadata) validate() error {
+	if m.Profile != "" {
+		if err := profile.ValidateID(m.Profile); err != nil {
+			return err
+		}
+	}
+	if m.Operation != "" && m.Operation != "run" && m.Operation != "login" {
+		return fmt.Errorf("unsupported session operation")
+	}
+
 	if err := validateID(m.ID); err != nil {
 		return err
 	}

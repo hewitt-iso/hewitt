@@ -1,0 +1,86 @@
+// Package agent describes native coding clients independently of Docker and Cobra.
+package agent
+
+import "fmt"
+
+// ProfilePath is the stable container-visible mount point for native client state.
+const ProfilePath = "/hewitt/profile"
+
+// Invocation contains only non-secret launch configuration. Credentials belong
+// to the native client's files, never to this structure.
+type Invocation struct {
+	Entrypoint string
+	Args       []string
+	Env        []string
+}
+
+// Adapter supplies native run and subscription-login commands for one client.
+// Implementations do not read credentials or perform OAuth/refresh themselves.
+type Adapter interface {
+	Name() string
+	Run() Invocation
+	Login() Invocation
+}
+
+// Lookup selects an implemented adapter. Unsupported clients fail explicitly.
+func Lookup(name string) (Adapter, error) {
+	switch name {
+	case "claude":
+		return Claude{}, nil
+	case "codex":
+		return Codex{}, nil
+	default:
+		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: claude, codex)", name)
+	}
+}
+
+// Claude uses the unmodified Claude Code binary and its own subscription login.
+type Claude struct{}
+
+func (Claude) Name() string      { return "claude" }
+func (Claude) Run() Invocation   { return claudeInvocation() }
+func (Claude) Login() Invocation { return claudeInvocation("auth", "login", "--claudeai") }
+
+func claudeInvocation(args ...string) Invocation {
+	return invocation("claude", args, []string{"CLAUDE_CONFIG_DIR=" + ProfilePath + "/claude"}, []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+	})
+}
+
+// Codex uses a dedicated native file store so login survives container recreation.
+type Codex struct{}
+
+func (Codex) Name() string      { return "codex" }
+func (Codex) Run() Invocation   { return codexInvocation() }
+func (Codex) Login() Invocation { return codexInvocation("login", "--device-auth") }
+
+func codexInvocation(args ...string) Invocation {
+	command := []string{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`}
+	command = append(command, args...)
+	return invocation("codex", command, []string{"CODEX_HOME=" + ProfilePath + "/codex"}, []string{
+		"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL",
+		"OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_PROVIDER",
+	})
+}
+
+func invocation(binary string, args, env, unset []string) Invocation {
+	// env -u removes conflicting credentials even if baked into an image's ENV.
+	// Arguments are passed directly, never interpolated into a shell command.
+	command := make([]string, 0, len(unset)*2+1+len(args))
+	for _, key := range unset {
+		command = append(command, "-u", key)
+	}
+	command = append(command, binary)
+	command = append(command, args...)
+	base := []string{
+		"HOME=" + ProfilePath + "/home",
+		"XDG_CONFIG_HOME=" + ProfilePath + "/config",
+		"XDG_DATA_HOME=" + ProfilePath + "/data",
+		"XDG_STATE_HOME=" + ProfilePath + "/state",
+		"XDG_CACHE_HOME=" + ProfilePath + "/cache",
+	}
+	return Invocation{Entrypoint: "env", Args: command, Env: append(base, env...)}
+}
