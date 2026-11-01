@@ -10,12 +10,6 @@ import (
 func newSessionCommands() []*cobra.Command {
 	commands := []*cobra.Command{
 		{
-			Use:     "ps",
-			Short:   "List sessions",
-			Example: "  hewitt ps",
-			Args:    cobra.NoArgs,
-		},
-		{
 			Use:     "attach <session>",
 			Short:   "Reconnect to a session's terminal",
 			Example: "  hewitt attach session-id",

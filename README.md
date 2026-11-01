@@ -6,8 +6,9 @@ The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
 **Status:** early development. `run` creates a Docker container from an explicit
-image, saves local session metadata, and starts the container. Help, version,
-configuration, and command argument validation work. Agent installation and
+image, saves local session metadata, and starts the container. `ps` lists saved
+sessions without requiring Docker. Help, version, configuration, and command
+argument validation work. Agent installation and
 authentication, Git worktrees, persistent terminal sessions, and the other session
 commands are not implemented yet.
 
@@ -88,7 +89,8 @@ Docker CLI, but Docker may already have created or started the container. No
 automatic deletion is performed. Metadata is saved after creation and before
 startup, so failed starts retain their records. If saving metadata fails, startup
 is not attempted; the error identifies the preserved container for recovery.
-Until Hewitt's management commands are implemented, use Docker directly:
+Use `hewitt ps` to list saved sessions. For live container status and lifecycle
+operations, use Docker directly:
 
 ```sh
 docker ps -a --filter label=io.hewitt.managed=true
@@ -97,6 +99,24 @@ docker start <container-id>   # Retry a failed start
 docker stop <container-id>
 docker rm <container-id>      # Remove after stopping and inspecting
 ```
+
+## List sessions
+
+```sh
+./bin/hewitt ps
+./bin/hewitt ps --config /path/to/config.json
+```
+
+`ps` lists all saved sessions from the configured `data_dir`, ordered by session
+ID. The table includes `ID` (the full container ID), `AGENT`, `IMAGE`, `NAME`
+(`-` when not supplied), and `CREATED` (a UTC RFC 3339 timestamp). An empty or
+missing store prints only the header and creates no files or directories.
+Invalid or unreadable records fail the command without printing a partial list.
+
+Listing does not require or query Docker. Saved records describe creation intent,
+not live container status or agent readiness. Failed starts and containers removed
+outside Hewitt remain listed while their metadata exists. Containers whose
+metadata could not be saved do not appear.
 
 ## Configuration
 
@@ -118,8 +138,9 @@ command name. Help bypasses configuration loading for every command.
 }
 ```
 
-`data_dir` defaults to `$HOME/.hewitt` and holds session metadata, with space
-reserved for future worktrees. It must be an absolute path; `~` and environment
+`data_dir` defaults to `$HOME/.hewitt` and holds session metadata written by `run`
+and read by `ps`, with space reserved for future worktrees. It must be an absolute
+path; `~` and environment
 variables are not expanded. Omitted fields retain defaults. Loading configuration
 creates no files or directories. Do not put credentials in this file.
 
@@ -155,8 +176,9 @@ left unchanged. Metadata access is confined beneath the data directory.
 Reading or listing a missing store creates no files. Listing returns records in
 ID order and reports malformed records instead of hiding them. Missing reads and
 deletions return errors. Deleting metadata only removes its JSON file, never a
-container or worktree. These storage operations are currently a Go package API;
-`ps`, `rm`, and the other session management commands remain unimplemented.
+container or worktree. `ps` exposes metadata listing at the CLI. Metadata deletion
+is currently a Go package API; `rm` and the other session management commands
+remain unimplemented.
 
 ## Development
 
@@ -227,13 +249,13 @@ packages, daemon, server, database, or cloud service are part of this foundation
 ## Session commands and planned MVP
 
 All commands are registered with help, examples, and argument validation. `run`
-currently implements container creation/startup as described above. The remaining
-commands return a "not implemented yet" error and exit with status 1.
+implements container creation/startup, and `ps` lists saved sessions as described
+above. The remaining commands return a "not implemented yet" error and exit with
+status 1.
 
 | Command | Planned capability |
 | --- | --- |
 | `hewitt run <agent>` | Add agent setup, worktrees, and persistent sessions to container startup |
-| `hewitt ps` | List independent sessions |
 | `hewitt attach <session>` | Reconnect to a persistent terminal session |
 | `hewitt stop <session>` | Stop a session |
 | `hewitt rm <session>` | Remove a session and safely clean up its resources |
