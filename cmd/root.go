@@ -13,7 +13,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
-		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image. Agent setup,\nworktrees, terminal sessions, and the other session commands are not implemented yet.",
+		Long:          "Hewitt is a local-first CLI for coding agents in Docker containers and Git worktrees.\n\nThe run command creates and starts a container from an explicit image.\nThe ps command lists saved sessions without requiring Docker. Agent setup,\nworktrees, terminal sessions, and the other session commands are not implemented yet.",
 		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
@@ -37,5 +37,6 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
 	cmd.AddCommand(newSessionCommands()...)
 	cmd.AddCommand(newRunCommand(&cfg))
+	cmd.AddCommand(newPSCommand(&cfg))
 	return cmd
 }
