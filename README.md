@@ -5,9 +5,10 @@ containers, each with its own Git worktree and persistent terminal session.
 The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
-**Status:** initial Go foundation. Help, version, and basic configuration loading
-work. Session commands, Docker integration, agent adapters, and authentication
-are not implemented yet.
+**Status:** CLI foundation. Help, version, configuration loading, and session
+command argument validation work. Session commands are placeholders that return
+nonzero errors. Session execution, Docker integration, agent adapters, and
+authentication are not implemented yet.
 
 ## Requirements
 
@@ -36,6 +37,8 @@ With no arguments, Hewitt validates configuration and prints help. Unknown
 commands and flags fail with a nonzero exit status. Help and version do not load
 configuration or require any external services.
 
+Explore command help with `hewitt run --help` or `hewitt help attach`.
+
 For a versioned build:
 
 ```sh
@@ -55,7 +58,9 @@ The optional JSON config file lives at:
 
 Use `--config /path/to/config.json` to select a different file. A missing default
 file uses defaults; a missing explicitly selected file is an error. Invalid JSON,
-unknown fields, and invalid values are errors.
+unknown fields, and invalid values are errors. Configuration is validated before
+command execution, after argument validation. The flag works before or after the
+command name. Help bypasses configuration loading for every command.
 
 ```json
 {
@@ -116,9 +121,12 @@ Cobra. Keep runtime and workspace operations out of command handlers. Add small
 interfaces only where a real consumer needs substitution or testing. No empty
 packages, daemon, server, database, or cloud service are part of this foundation.
 
-## Planned MVP
+## Session commands and planned MVP
 
-These commands are planned and are **not registered or implemented**:
+These commands are registered with help, examples, and argument validation.
+Execution is **not implemented**: valid invocations return an error such as
+`Error: hewitt run is not implemented yet` and exit with status 1. They create no
+sessions, containers, worktrees, or local state.
 
 | Command | Planned capability |
 | --- | --- |
@@ -129,6 +137,11 @@ These commands are planned and are **not registered or implemented**:
 | `hewitt rm <session>` | Remove a session and safely clean up its resources |
 | `hewitt logs <session>` | Read session output |
 | `hewitt diff <session>` | Inspect worktree changes |
+
+`run` requires exactly one agent name: `claude`, `codex`, or `opencode`.
+`ps` accepts no positional arguments. All other commands require exactly one
+nonempty session identifier; identifier format and existence checks will be
+added with session management.
 
 The next development step is Git worktree management with tests against temporary
 repositories, including safeguards against removing uncommitted user work.

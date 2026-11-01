@@ -25,10 +25,10 @@ func TestRootCommand(t *testing.T) {
 		wantErr string
 	}{
 		{name: "no arguments", want: "Usage:"},
-		{name: "help", args: []string{"--help"}, want: "Session commands\nare not implemented yet."},
+		{name: "help", args: []string{"--help"}, want: "Session execution is not\nimplemented yet."},
 		{name: "short help", args: []string{"-h"}, want: "--config"},
 		{name: "version", args: []string{"--version"}, want: "hewitt v0.1.0-test\n"},
-		{name: "unknown command", args: []string{"run", "codex"}, wantErr: "unknown command"},
+		{name: "unknown command", args: []string{"unknown"}, wantErr: "unknown command"},
 		{name: "unknown flag", args: []string{"--unknown"}, wantErr: "unknown flag"},
 		{name: "missing flag value", args: []string{"--config"}, wantErr: "flag needs an argument"},
 		{name: "missing config", args: []string{"--config", missing}, wantErr: "read config"},
