@@ -11,10 +11,11 @@ do not make separate API credits a prerequisite.
 - `main.go`: process entry point, version injection, exit status.
 - `cmd`: Cobra commands, argument validation, user-facing output.
 - `config`: configuration defaults, file loading, and validation.
-- `docker`: container creation/startup through the Docker CLI, subprocess errors,
-  and cancellation. Callers own created containers; failed starts preserve them
+- `docker`: container creation, startup, and terminal attachment through the
+  Docker CLI, subprocess errors, and cancellation. Callers own created containers; failed starts preserve them
   and report their IDs. Do not silently remove containers after a failed start.
-- `session`: versioned local JSON metadata and create/save/start coordination.
+- `session`: versioned local JSON metadata, create/save/start coordination, and saved
+  session lookup for attachment.
   Save metadata before startup; preserve and identify containers if saving fails.
   Metadata deletion never removes containers or worktrees. Future session
   management will also coordinate Git workspaces, agent adapters, and

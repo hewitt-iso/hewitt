@@ -16,7 +16,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nThe image must contain env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no repository or host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nDo not use one profile concurrently. Worktrees and reconnectable sessions are not implemented.",
+		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nThe image must contain env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no repository or host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nDo not use one profile concurrently. Use hewitt attach to connect to a running container.\nWorktrees and terminal multiplexing are not implemented.",
 		Example:   "  hewitt " + action + " codex --image my-codex:local --profile personal",
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),

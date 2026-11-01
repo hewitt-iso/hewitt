@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
+
+	"golang.org/x/term"
 )
 
 // Client uses the Docker executable on PATH and the user's Docker context.
@@ -168,6 +172,43 @@ func (c Client) Start(ctx context.Context, id string) error {
 	}
 	if _, err := c.execute(ctx, "container", "start", "--", id); err != nil {
 		return fmt.Errorf("start container %q (container preserved): %w", id, err)
+	}
+	return nil
+}
+
+// Attach connects streams to an existing container process. Docker owns terminal
+// setup and the Ctrl-P, Ctrl-Q detach sequence. Attachment never starts a container.
+func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer) (result error) {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("attach container %q: %w", id, err)
+	}
+	// Docker normally restores terminal settings itself. Keep a snapshot because
+	// CommandContext may kill it before its cleanup runs during cancellation.
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fd := int(f.Fd())
+		state, err := term.GetState(fd)
+		if err != nil {
+			return fmt.Errorf("read terminal state: %w", err)
+		}
+		defer func() {
+			if err := term.Restore(fd, state); err != nil {
+				result = errors.Join(result, fmt.Errorf("restore terminal state: %w", err))
+			}
+		}()
+	}
+	cmd := exec.CommandContext(ctx, "docker", "container", "attach", "--detach-keys=ctrl-p,ctrl-q", "--sig-proxy=false", "--", id)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	cmd.WaitDelay = time.Second
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if errors.Is(err, exec.ErrNotFound) {
+			err = fmt.Errorf("ensure the Docker CLI is installed: %w", err)
+		}
+		return fmt.Errorf("attach container %q: %w", id, err)
 	}
 	return nil
 }

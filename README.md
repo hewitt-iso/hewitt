@@ -7,9 +7,10 @@ their changes, and manage their environments from one CLI.
 
 **Status:** early development. `run` creates a Docker container from an explicit
 image, saves local session metadata, and starts the container. `ps` lists saved
-sessions without requiring Docker. Help, version, configuration, and command
+sessions without requiring Docker. `attach` connects to a running container
+terminal. Help, version, configuration, and command
 argument validation work. Agent installation and
-authentication, Git worktrees, persistent terminal sessions, and the other session
+authentication, Git worktrees, terminal multiplexing, and the other session
 commands are not implemented yet.
 
 ## Requirements
@@ -80,8 +81,9 @@ user and Docker's default network are retained.
 On successful startup, stdout contains only the container ID. This means Docker
 accepted the start request, not that the agent is ready or will keep running.
 The container's lifetime follows the image's command; a command that finishes
-immediately leaves an exited container. A TTY alone does not implement Hewitt's
-planned reconnectable terminal sessions.
+immediately leaves an exited container. Use `hewitt attach <full-session-id>` to
+connect to the running process.
+Terminal multiplexing inside the container is not implemented.
 
 The caller owns created containers. If startup fails, the error identifies the
 preserved container so you can inspect or retry it. Cancellation interrupts the
@@ -117,6 +119,28 @@ Listing does not require or query Docker. Saved records describe creation intent
 not live container status or agent readiness. Failed starts and containers removed
 outside Hewitt remain listed while their metadata exists. Containers whose
 metadata could not be saved do not appear.
+
+## Attach to a session
+
+```sh
+./bin/hewitt ps
+./bin/hewitt attach <full-session-id>
+```
+
+`attach` reads the saved record from the configured `data_dir` (including when
+selected with `--config`) and connects stdin, stdout, and stderr using
+[`docker container attach`](https://docs.docker.com/reference/cli/docker/container/attach/).
+Use the full ID printed by `run` or `ps`; names and abbreviated IDs are not
+accepted. Interactive input requires a terminal. Docker handles terminal mode and
+resizing; Hewitt also restores terminal settings after cancellation.
+
+Press **Ctrl-P, Ctrl-Q** to detach and leave the container running. Ctrl-C may
+interrupt the process inside the container. Attachment connects to the image's
+existing process; it does not launch a new shell or replay past output. Stopped,
+removed, or unavailable containers produce Docker errors. No automatic startup,
+cleanup, or metadata changes occur. Docker diagnostics and container stderr go to
+stderr; container stdout goes to stdout. Cancelling Hewitt disconnects the local
+Docker client with signal proxying disabled.
 
 ## Configuration
 
@@ -228,8 +252,10 @@ Makefile                   Development commands
 Hewitt is a modular monolith. `main` owns signals and exit status; `cmd` owns flags
 and output; `config` owns non-secret preferences; `docker` owns Docker subprocess
 execution and isolation defaults; `session` owns metadata and coordinates
-create/save/start. Cobra is the only direct Go dependency. The concrete Docker
-client accepts contexts and returns errors without printing them.
+create/save/start and attachment lookup. Cobra provides CLI parsing;
+`golang.org/x/term` provides terminal restoration after attachment cancellation.
+The concrete Docker client accepts contexts and returns errors. Attachment
+streams container output and Docker diagnostics to the supplied writers.
 
 As features arrive, add focused packages with these boundaries:
 
@@ -250,13 +276,12 @@ packages, daemon, server, database, or cloud service are part of this foundation
 
 All commands are registered with help, examples, and argument validation. `run`
 implements container creation/startup, and `ps` lists saved sessions as described
-above. The remaining commands return a "not implemented yet" error and exit with
-status 1.
+above; `attach` connects to a running container terminal. The remaining commands
+return a "not implemented yet" error and exit with status 1.
 
 | Command | Planned capability |
 | --- | --- |
 | `hewitt run <agent>` | Add agent setup, worktrees, and persistent sessions to container startup |
-| `hewitt attach <session>` | Reconnect to a persistent terminal session |
 | `hewitt stop <session>` | Stop a session |
 | `hewitt rm <session>` | Remove a session and safely clean up its resources |
 | `hewitt logs <session>` | Read session output |
@@ -264,8 +289,9 @@ status 1.
 
 `run` requires exactly one agent name and `--image`.
 `ps` accepts no positional arguments. All other commands require exactly one
-nonempty session identifier; identifier format and existence checks will be
-added with session management.
+nonempty session identifier. `attach` validates the full ID and saved record;
+identifier format and existence checks for the remaining commands will be added
+with session management.
 
 The next development step is Git worktree management with tests against temporary
 repositories, including safeguards against removing uncommitted user work.
