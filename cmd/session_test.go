@@ -17,7 +17,6 @@ func TestSessionCommands(t *testing.T) {
 		name string
 		arg  string
 	}{
-		{name: "attach", arg: "session-id"},
 		{name: "stop", arg: "session-id"},
 		{name: "rm", arg: "session-id"},
 		{name: "logs", arg: "session-id"},
