@@ -1,24 +1,34 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hewitt-iso/hewitt/config"
+	"github.com/hewitt-iso/hewitt/session"
 )
 
 const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestRun(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		failure   string
-		wantError string
-		wantCalls string
+		name       string
+		failure    string
+		wantError  string
+		wantCalls  string
+		customDir  bool
+		blockedDir bool
 	}{
 		{name: "success", wantCalls: "create\nstart\n"},
 		{name: "create failure", failure: "create", wantError: "create container", wantCalls: "create\n"},
 		{name: "start failure", failure: "start", wantError: "container preserved", wantCalls: "create\nstart\n"},
+		{name: "custom data directory", customDir: true, wantCalls: "create\nstart\n"},
+		{name: "metadata failure", customDir: true, blockedDir: true, wantError: "startup not attempted", wantCalls: "create\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -26,10 +36,34 @@ func TestRun(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 			t.Setenv("PATH", dir)
 			t.Setenv("HEWITT_TEST_FAILURE", tt.failure)
+			dataDir := filepath.Join(dir, ".hewitt")
+			args := []string{"run", "codex", "--image", "my-codex:local", "--name", "hewitt-test"}
+			if tt.customDir {
+				dataDir = filepath.Join(dir, "custom-data")
+				cfg, err := json.Marshal(config.Config{DataDir: dataDir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, "config.json")
+				if err := os.WriteFile(path, cfg, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "--config", path)
+			}
+			if tt.blockedDir {
+				if err := os.WriteFile(dataDir, []byte("untouched"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("HEWITT_TEST_METADATA", filepath.Join(dataDir, "sessions", containerID+".json"))
 			calls := filepath.Join(dir, "calls")
 			t.Setenv("HEWITT_TEST_CALLS", calls)
 			script := `#!/bin/sh
 printf '%s\n' "$2" >> "$HEWITT_TEST_CALLS"
+if [ "$2" = start ] && [ ! -f "$HEWITT_TEST_METADATA" ]; then
+  printf 'metadata must be saved before start\n' >&2
+  exit 1
+fi
 if [ "$2" = "$HEWITT_TEST_FAILURE" ]; then
   printf 'test Docker failure\n' >&2
   exit 1
@@ -39,12 +73,13 @@ printf '%s\n' '` + containerID + `'
 			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			out, err := executeCommand(t, "run", "codex", "--image", "my-codex:local", "--name", "hewitt-test")
+			before := time.Now()
+			out, err := executeCommand(t, args...)
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) || out != "" {
 					t.Fatalf("output = %q, error = %v, want %q", out, err, tt.wantError)
 				}
-				if tt.failure == "start" && !strings.Contains(err.Error(), containerID) {
+				if (tt.failure == "start" || tt.blockedDir) && !strings.Contains(err.Error(), containerID) {
 					t.Errorf("start failure did not identify retained container: %v", err)
 				}
 			} else if err != nil || out != containerID+"\n" {
@@ -53,6 +88,25 @@ printf '%s\n' '` + containerID + `'
 			got, err := os.ReadFile(calls)
 			if err != nil || string(got) != tt.wantCalls {
 				t.Fatalf("Docker calls = %q, %v; want %q", got, err, tt.wantCalls)
+			}
+			if tt.blockedDir {
+				got, err := os.ReadFile(dataDir)
+				if err != nil || string(got) != "untouched" {
+					t.Fatalf("metadata failure changed existing file: %q, %v", got, err)
+				}
+				return
+			}
+			store, err := session.NewStore(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := store.Get(containerID)
+			if tt.failure == "create" {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("create failure wrote metadata: %+v, %v", m, err)
+				}
+			} else if err != nil || m.ID != containerID || m.Agent != "codex" || m.Image != "my-codex:local" || m.Name != "hewitt-test" || m.CreatedAt.Before(before) || m.CreatedAt.After(time.Now()) {
+				t.Fatalf("saved metadata = %+v, %v", m, err)
 			}
 		})
 	}

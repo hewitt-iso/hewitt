@@ -5,10 +5,11 @@ containers, each with its own Git worktree and persistent terminal session.
 The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
-**Status:** early development. `run` creates and starts a Docker container from an
-explicit image. Help, version, configuration, and command argument validation
-work. Agent installation/authentication, Git worktrees, persistent terminal
-sessions, and the other session commands are not implemented yet.
+**Status:** early development. `run` creates a Docker container from an explicit
+image, saves local session metadata, and starts the container. Help, version,
+configuration, and command argument validation work. Agent installation and
+authentication, Git worktrees, persistent terminal sessions, and the other session
+commands are not implemented yet.
 
 ## Requirements
 
@@ -62,8 +63,8 @@ Supply an image whose default entrypoint and command launch your chosen agent:
 
 `my-codex:local` is an example name for an image you provide; Hewitt does not yet
 ship agent images. `--image` is required and `--name` is optional. The agent
-argument accepts `claude`, `codex`, or `opencode`; it records your intent in the
-invocation but does not select an executable or verify the image's contents.
+argument accepts `claude`, `codex`, or `opencode`; it records your intent in local
+session metadata but does not select an executable or verify the image's contents.
 Hewitt runs the image's default command. It does not install agents, supply login
 state, mount your repository, or create a Git worktree yet.
 
@@ -84,8 +85,10 @@ planned reconnectable terminal sessions.
 The caller owns created containers. If startup fails, the error identifies the
 preserved container so you can inspect or retry it. Cancellation interrupts the
 Docker CLI, but Docker may already have created or started the container. No
-automatic deletion or local session metadata is implemented. Until Hewitt's
-management commands are implemented, use Docker directly:
+automatic deletion is performed. Metadata is saved after creation and before
+startup, so failed starts retain their records. If saving metadata fails, startup
+is not attempted; the error identifies the preserved container for recovery.
+Until Hewitt's management commands are implemented, use Docker directly:
 
 ```sh
 docker ps -a --filter label=io.hewitt.managed=true
@@ -115,10 +118,45 @@ command name. Help bypasses configuration loading for every command.
 }
 ```
 
-`data_dir` defaults to `$HOME/.hewitt` and reserves a location for future session
-data and worktrees. It must be an absolute path; `~` and environment variables
-are not expanded. Omitted fields retain defaults. Loading configuration creates
-no files or directories. Do not put credentials in this file.
+`data_dir` defaults to `$HOME/.hewitt` and holds session metadata, with space
+reserved for future worktrees. It must be an absolute path; `~` and environment
+variables are not expanded. Omitted fields retain defaults. Loading configuration
+creates no files or directories. Do not put credentials in this file.
+
+## Session metadata
+
+`run` writes `<data_dir>/sessions/<container-id>.json`. The full Docker container
+ID is currently also the session ID; successful `run` output remains that ID.
+Each record uses this versioned format:
+
+```json
+{
+  "version": 1,
+  "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "agent": "codex",
+  "image": "my-codex:local",
+  "name": "hewitt-codex",
+  "created_at": "2026-11-01T12:00:00Z"
+}
+```
+
+`name` is omitted when no container name was supplied. Records describe creation
+intent, not live container status or agent readiness. They contain no credentials,
+agent prompts, or login state. Docker operations performed outside Hewitt do not
+update these records, and metadata written before a failed start remains present.
+
+The `session` package supports saving, reading, listing, and deleting metadata.
+It validates full container IDs, required fields, and format versions. Writes use
+an atomic rename so readers see complete records; simultaneous writes to the same
+ID use the last completed replacement. New data and session directories have
+mode `0700`, and record files have mode `0600`; existing directory permissions are
+left unchanged. Metadata access is confined beneath the data directory.
+
+Reading or listing a missing store creates no files. Listing returns records in
+ID order and reports malformed records instead of hiding them. Missing reads and
+deletions return errors. Deleting metadata only removes its JSON file, never a
+container or worktree. These storage operations are currently a Go package API;
+`ps`, `rm`, and the other session management commands remain unimplemented.
 
 ## Development
 
@@ -159,6 +197,7 @@ main.go                    Process entry point and build version
 cmd/                       Cobra command construction and CLI tests
 config/                    Config loading, defaults, validation, and tests
 docker/                    Docker CLI runtime and lifecycle tests
+session/                   Local metadata storage and recorded container startup
 .github/workflows/ci.yml    Linux and macOS checks
 AGENTS.md                  Instructions for coding agents
 Makefile                   Development commands
@@ -166,20 +205,21 @@ Makefile                   Development commands
 
 Hewitt is a modular monolith. `main` owns signals and exit status; `cmd` owns flags
 and output; `config` owns non-secret preferences; `docker` owns Docker subprocess
-execution and isolation defaults. Cobra is the only direct Go dependency. The
-concrete Docker client accepts contexts and returns errors without printing them.
+execution and isolation defaults; `session` owns metadata and coordinates
+create/save/start. Cobra is the only direct Go dependency. The concrete Docker
+client accepts contexts and returns errors without printing them.
 
 As features arrive, add focused packages with these boundaries:
 
 | Component | Responsibility |
 | --- | --- |
-| Session management | Coordinate session lifecycle and local metadata |
+| Session management | Extend the existing `session` package with lifecycle coordination |
 | Container runtime | Extend the existing `docker` package with lifecycle operations and workspace mounts |
 | Git workspaces | Create, inspect, and safely remove Git worktrees |
 | Agent adapters | Agent-specific launch commands and capabilities |
 | Authentication | Official login flows and credential lifecycle |
 
-Session management will coordinate the other components without depending on
+Session management coordinates the other components without depending on
 Cobra. Keep runtime and workspace operations out of command handlers. Add small
 interfaces only where a real consumer needs substitution or testing. No empty
 packages, daemon, server, database, or cloud service are part of this foundation.
