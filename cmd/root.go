@@ -9,6 +9,7 @@ import (
 // NewRootCommand returns an independent command tree for one invocation.
 func NewRootCommand(version string) *cobra.Command {
 	var configPath string
+	var cfg config.Config
 	cmd := &cobra.Command{
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
@@ -23,7 +24,8 @@ func NewRootCommand(version string) *cobra.Command {
 			if cmd.Name() == "help" {
 				return nil
 			}
-			_, err := config.Load(configPath)
+			var err error
+			cfg, err = config.Load(configPath)
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -34,6 +36,6 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
 	cmd.AddCommand(newSessionCommands()...)
-	cmd.AddCommand(newRunCommand())
+	cmd.AddCommand(newRunCommand(&cfg))
 	return cmd
 }

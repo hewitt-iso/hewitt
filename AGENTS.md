@@ -14,9 +14,12 @@ do not make separate API credits a prerequisite.
 - `docker`: container creation/startup through the Docker CLI, subprocess errors,
   and cancellation. Callers own created containers; failed starts preserve them
   and report their IDs. Do not silently remove containers after a failed start.
-- Future session management coordinates the Docker runtime, Git workspaces,
-  agent adapters, and authentication. Add those packages only with working
-  behavior; do not create empty packages or speculative interfaces.
+- `session`: versioned local JSON metadata and create/save/start coordination.
+  Save metadata before startup; preserve and identify containers if saving fails.
+  Metadata deletion never removes containers or worktrees. Future session
+  management will also coordinate Git workspaces, agent adapters, and
+  authentication. Add packages only with working behavior; do not create empty
+  packages or speculative interfaces.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace
   boundary. Agent adapters describe agent-specific execution; authentication
   handles credential lifecycles separately. Neither should depend on Cobra.
