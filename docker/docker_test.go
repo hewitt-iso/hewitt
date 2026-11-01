@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -11,6 +12,69 @@ import (
 	"testing"
 	"time"
 )
+
+func TestExplicitProfileOptions(t *testing.T) {
+	log := fakeDocker(t, `printf '%s\n' '`+testID+`'`)
+	opts := CreateOptions{Image: "agent:test", Entrypoint: "env", Command: []string{"codex"}, Env: []string{"CODEX_HOME=/profile/codex"}, Mounts: []BindMount{{Source: "/path with spaces/profile", Target: "/profile"}}, User: "1000:1000", Workdir: "/tmp", DisableLogs: true}
+	if _, err := (Client{}).Create(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	args := readArgs(t, log)
+	for key, value := range map[string]string{"--entrypoint": "env", "--env": "CODEX_HOME=/profile/codex", "--mount": "type=bind,src=/path with spaces/profile,dst=/profile", "--user": "1000:1000", "--workdir": "/tmp", "--log-driver": "none", "--cap-drop": "ALL", "--security-opt": "no-new-privileges=true"} {
+		found := false
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == key && args[i+1] == value {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %s %s in %q", key, value, args)
+		}
+	}
+}
+
+func TestInvalidProfileOptionsDoNotInvokeDocker(t *testing.T) {
+	log := fakeDocker(t, "exit 99")
+	for _, opts := range []CreateOptions{
+		{Image: "test", Env: []string{"TOKEN"}}, {Image: "test", Env: []string{"BAD-KEY=x"}},
+		{Image: "test", Mounts: []BindMount{{Source: "relative", Target: "/profile"}}},
+		{Image: "test", Mounts: []BindMount{{Source: "/path,readonly", Target: "/profile"}}},
+		{Image: "test", Workdir: "relative"}, {Image: "test", Command: []string{"bad\x00arg"}},
+	} {
+		if _, err := (Client{}).Create(context.Background(), opts); err == nil {
+			t.Errorf("accepted %+v", opts)
+		}
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatalf("Docker invoked: %v", err)
+	}
+}
+
+func TestAttachedExitStatusAndStreams(t *testing.T) {
+	for _, code := range []string{"0", "7", "garbage"} {
+		t.Run(code, func(t *testing.T) {
+			fakeDocker(t, `if [ "$2" = "start" ]; then
+read -r input
+printf 'native:%s' "$input"
+printf 'diagnostic' >&2
+else
+printf '%s' "$HEWITT_TEST_EXIT"
+fi`)
+			t.Setenv("HEWITT_TEST_EXIT", code)
+			var out, stderr bytes.Buffer
+			err := (Client{}).StartAttached(context.Background(), testID, strings.NewReader("answer\n"), &out, &stderr)
+			if (err == nil) != (code == "0") {
+				t.Fatalf("exit %s: %v", code, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), testID) {
+				t.Fatalf("missing retained ID: %v", err)
+			}
+			if out.String() != "native:answer" || stderr.String() != "diagnostic" {
+				t.Fatalf("streams: %q %q", out.String(), stderr.String())
+			}
+		})
+	}
+}
 
 const testID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 

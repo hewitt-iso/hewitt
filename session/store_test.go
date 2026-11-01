@@ -125,6 +125,8 @@ func TestStoreValidation(t *testing.T) {
 		}
 	}
 	for _, change := range []func(*Metadata){
+		func(m *Metadata) { m.Profile = "../escape" },
+		func(m *Metadata) { m.Operation = "unknown" },
 		func(m *Metadata) { m.Agent = "unknown" },
 		func(m *Metadata) { m.Image = "" },
 		func(m *Metadata) { m.Image = "bad\nimage" },

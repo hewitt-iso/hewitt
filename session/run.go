@@ -12,6 +12,17 @@ import (
 // the container belongs to the caller even if saving or starting fails. A metadata
 // failure prevents startup and reports the preserved container ID for recovery.
 func Run(ctx context.Context, store *Store, agent string, opts docker.CreateOptions) (Metadata, error) {
+	m, err := createAgentContainer(ctx, store, agent, opts, "", "")
+	if err != nil {
+		return m, err
+	}
+	if err := (docker.Client{}).Start(ctx, m.ID); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+func createAgentContainer(ctx context.Context, store *Store, agent string, opts docker.CreateOptions, profileID, operation string) (Metadata, error) {
 	if err := validateAgent(agent); err != nil {
 		return Metadata{}, err
 	}
@@ -20,12 +31,9 @@ func Run(ctx context.Context, store *Store, agent string, opts docker.CreateOpti
 	if err != nil {
 		return Metadata{}, err
 	}
-	m := Metadata{ID: id, Agent: agent, Image: opts.Image, Name: opts.Name, CreatedAt: time.Now().UTC()}
+	m := Metadata{ID: id, Agent: agent, Image: opts.Image, Name: opts.Name, CreatedAt: time.Now().UTC(), Profile: profileID, Operation: operation}
 	if err := store.Save(m); err != nil {
 		return m, fmt.Errorf("record container %q (container preserved, startup not attempted): %w", id, err)
-	}
-	if err := client.Start(ctx, id); err != nil {
-		return m, err
 	}
 	return m, nil
 }
