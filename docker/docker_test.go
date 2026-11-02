@@ -58,7 +58,7 @@ read -r input
 printf 'native:%s' "$input"
 printf 'diagnostic' >&2
 else
-printf '%s' "$HEWITT_TEST_EXIT"
+printf '{"Status":"exited","ExitCode":%s}' "$HEWITT_TEST_EXIT"
 fi`)
 			t.Setenv("HEWITT_TEST_EXIT", code)
 			var out, stderr bytes.Buffer

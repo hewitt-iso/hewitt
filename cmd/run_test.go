@@ -32,7 +32,7 @@ func TestLoginUsesSelectedConfigAndProfile(t *testing.T) {
 case "$2" in
 create) printf '%s\n' '` + containerID + `' ;;
 start) printf 'native login' ;;
-wait) printf '0\n' ;;
+inspect) printf '%s\n' '{"Status":"exited","ExitCode":0}' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700); err != nil {

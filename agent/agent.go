@@ -20,6 +20,8 @@ type Adapter interface {
 	Name() string
 	Run() Invocation
 	Login() Invocation
+	Status() Invocation
+	Logout() Invocation
 }
 
 // Lookup selects an implemented adapter. Unsupported clients fail explicitly.
@@ -37,9 +39,11 @@ func Lookup(name string) (Adapter, error) {
 // Claude uses the unmodified Claude Code binary and its own subscription login.
 type Claude struct{}
 
-func (Claude) Name() string      { return "claude" }
-func (Claude) Run() Invocation   { return claudeInvocation() }
-func (Claude) Login() Invocation { return claudeInvocation("auth", "login", "--claudeai") }
+func (Claude) Name() string       { return "claude" }
+func (Claude) Run() Invocation    { return claudeInvocation() }
+func (Claude) Login() Invocation  { return claudeInvocation("auth", "login", "--claudeai") }
+func (Claude) Status() Invocation { return claudeInvocation("auth", "status") }
+func (Claude) Logout() Invocation { return claudeInvocation("auth", "logout") }
 
 func claudeInvocation(args ...string) Invocation {
 	return invocation("claude", args, []string{"CLAUDE_CONFIG_DIR=" + ProfilePath + "/claude"}, []string{
@@ -53,9 +57,11 @@ func claudeInvocation(args ...string) Invocation {
 // Codex uses a dedicated native file store so login survives container recreation.
 type Codex struct{}
 
-func (Codex) Name() string      { return "codex" }
-func (Codex) Run() Invocation   { return codexInvocation() }
-func (Codex) Login() Invocation { return codexInvocation("login", "--device-auth") }
+func (Codex) Name() string       { return "codex" }
+func (Codex) Run() Invocation    { return codexInvocation() }
+func (Codex) Login() Invocation  { return codexInvocation("login", "--device-auth") }
+func (Codex) Status() Invocation { return codexInvocation("login", "status") }
+func (Codex) Logout() Invocation { return codexInvocation("logout") }
 
 func codexInvocation(args ...string) Invocation {
 	command := []string{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`}

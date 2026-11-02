@@ -237,7 +237,7 @@ func (m Metadata) validate() error {
 			return err
 		}
 	}
-	if m.Operation != "" && m.Operation != "run" && m.Operation != "login" {
+	if m.Operation != "" && m.Operation != "run" && m.Operation != "login" && m.Operation != "status" && m.Operation != "logout" {
 		return fmt.Errorf("unsupported session operation")
 	}
 
