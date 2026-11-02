@@ -1,11 +1,14 @@
 package workspace
 
 import (
+	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -17,6 +20,9 @@ type Copy struct {
 	Source string   `json:"source"`
 	Path   string   `json:"path"`
 	Paths  []string `json:"paths"`
+	// Base is an untouched snapshot used to show and verify the agent's
+	// changes; empty in older records.
+	Base string `json:"base,omitempty"`
 }
 
 // CreateCopy copies paths, relative to source, into <dataDir>/copies/<id> at the
@@ -42,25 +48,83 @@ func CreateCopy(dataDir, source string, paths []string) (Copy, error) {
 	if err != nil {
 		return Copy{}, fmt.Errorf("resolve copy directory: %w", err)
 	}
-	c := Copy{Source: source, Path: filepath.Join(root, strings.ToLower(rand.Text())), Paths: paths}
+	token := strings.ToLower(rand.Text())
+	c := Copy{Source: source, Path: filepath.Join(root, token), Paths: paths, Base: filepath.Join(root, token+".base")}
 	if err := c.Validate(); err != nil {
 		return c, err
 	}
-	if err := os.Mkdir(c.Path, 0o700); err != nil {
-		return c, fmt.Errorf("create copy %q: %w", c.Path, err)
+	// The working copy is made from the snapshot, so both match even if the
+	// source changes while copying.
+	for _, dir := range []string{c.Base, c.Path} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return c, fmt.Errorf("create copy %q: %w", dir, err)
+		}
 	}
 	for _, path := range paths {
-		if err := copyTree(filepath.Join(source, path), filepath.Join(c.Path, path)); err != nil {
-			return c, fmt.Errorf("copy %q into %q (partial copy preserved): %w", path, c.Path, err)
+		if err := copyTree(filepath.Join(source, path), filepath.Join(c.Base, path)); err != nil {
+			return c, fmt.Errorf("copy %q into %q (partial copy preserved): %w", path, c.Base, err)
 		}
+	}
+	if err := copyTree(c.Base, c.Path); err != nil {
+		return c, fmt.Errorf("copy snapshot into %q (partial copy preserved): %w", c.Path, err)
 	}
 	return c, nil
 }
 
+// DiffCopy writes the agent's changes relative to the snapshot. It reads only.
+func DiffCopy(ctx context.Context, c Copy, out io.Writer) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if c.Base == "" {
+		return fmt.Errorf("copy %q predates snapshots; compare it with %q manually", c.Path, c.Source)
+	}
+	return gitStream(ctx, out, filepath.Dir(c.Path), "diff", "--no-index", "--", filepath.Base(c.Base), filepath.Base(c.Path))
+}
+
+// RemoveCopy deletes the copy and its snapshot only when the agent left no
+// changes, so unreturned work is never discarded.
+func RemoveCopy(ctx context.Context, c Copy) error {
+	if err := CheckCopyRemovable(ctx, c); err != nil {
+		return err
+	}
+	for _, dir := range []string{c.Path, c.Base} {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove copy %q: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// CheckCopyRemovable reports why RemoveCopy would refuse. A missing copy is
+// removable; changes or a missing snapshot are not.
+func CheckCopyRemovable(ctx context.Context, c Copy) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(c.Path); os.IsNotExist(err) {
+		return nil
+	}
+	if c.Base == "" {
+		return fmt.Errorf("copy %q has no snapshot to verify; remove it manually after inspection", c.Path)
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", filepath.Dir(c.Path), "diff", "--no-index", "--quiet", "--", filepath.Base(c.Base), filepath.Base(c.Path))
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return fmt.Errorf("copy %q has changes; inspect with hewitt diff and return them before removal", c.Path)
+	} else if err != nil {
+		return fmt.Errorf("compare copy %q: %w", c.Path, err)
+	}
+	return nil
+}
+
 // Validate checks persisted paths before they can become container mounts.
 func (c Copy) Validate() error {
-	for _, path := range []string{c.Source, c.Path} {
-		if !filepath.IsAbs(path) || strings.ContainsAny(path, ",\x00\r\n") {
+	if c.Source == "" || c.Path == "" {
+		return fmt.Errorf("copy paths must not be empty")
+	}
+	for _, path := range []string{c.Source, c.Path, c.Base} {
+		if path != "" && !filepath.IsAbs(path) || strings.ContainsAny(path, ",\x00\r\n") {
 			return fmt.Errorf("copy paths must be absolute and contain no commas or control characters")
 		}
 	}

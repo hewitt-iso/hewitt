@@ -1,36 +1,58 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 
+	"github.com/hewitt-iso/hewitt/config"
+	"github.com/hewitt-iso/hewitt/session"
 	"github.com/spf13/cobra"
 )
 
-func newSessionCommands() []*cobra.Command {
-	commands := []*cobra.Command{
+func newSessionCommands(cfg *config.Config) []*cobra.Command {
+	withStore := func(run func(ctx context.Context, store *session.Store, id string, out io.Writer) error) func(*cobra.Command, []string) error {
+		return func(cmd *cobra.Command, args []string) error {
+			store, err := session.NewStore(cfg.DataDir)
+			if err != nil {
+				return err
+			}
+			return run(cmd.Context(), store, args[0], cmd.OutOrStdout())
+		}
+	}
+	implemented := []*cobra.Command{
 		{
 			Use:     "stop <session>",
-			Short:   "Stop a session",
-			Example: "  hewitt stop session-id",
+			Short:   "Stop a session's agent, keeping its container and workspace",
+			Example: "  hewitt stop <full-session-id>",
 			Args:    sessionArg,
+			RunE: withStore(func(ctx context.Context, store *session.Store, id string, _ io.Writer) error {
+				return session.Stop(ctx, store, id)
+			}),
 		},
 		{
 			Use:     "rm <session>",
-			Short:   "Remove a session and clean up its resources",
-			Example: "  hewitt rm session-id",
+			Short:   "Remove a stopped session; refuses to discard uncommitted or unreturned work",
+			Example: "  hewitt rm <full-session-id>",
 			Args:    sessionArg,
+			RunE: withStore(func(ctx context.Context, store *session.Store, id string, _ io.Writer) error {
+				return session.Remove(ctx, store, id)
+			}),
 		},
+		{
+			Use:     "diff <session>",
+			Short:   "Show a session's changes since its workspace was created",
+			Example: "  hewitt diff <full-session-id>",
+			Args:    sessionArg,
+			RunE:    withStore(session.Diff),
+		},
+	}
+	commands := []*cobra.Command{
 		{
 			Use:     "logs <session>",
 			Short:   "Read session output",
 			Example: "  hewitt logs session-id",
-			Args:    sessionArg,
-		},
-		{
-			Use:     "diff <session>",
-			Short:   "Inspect a session's worktree changes",
-			Example: "  hewitt diff session-id",
 			Args:    sessionArg,
 		},
 	}
@@ -44,7 +66,7 @@ func newSessionCommands() []*cobra.Command {
 			return fmt.Errorf("%s is not implemented yet", cmd.CommandPath())
 		}
 	}
-	return commands
+	return append(implemented, commands...)
 }
 
 func sessionArg(cmd *cobra.Command, args []string) error {
