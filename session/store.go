@@ -14,20 +14,22 @@ import (
 	"unicode"
 
 	"github.com/hewitt-iso/hewitt/profile"
+	"github.com/hewitt-iso/hewitt/workspace"
 )
 
 // Metadata records creation intent, not the container's current runtime state.
 // IDs are full Docker container IDs until sessions have independent resources.
 // Credentials and agent input must never be stored here.
 type Metadata struct {
-	Terminal  string    `json:"terminal,omitempty"`
-	Profile   string    `json:"profile,omitempty"`
-	Operation string    `json:"operation,omitempty"`
-	ID        string    `json:"id"`
-	Agent     string    `json:"agent"`
-	Image     string    `json:"image"`
-	Name      string    `json:"name,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Workspace *workspace.Worktree `json:"workspace,omitempty"`
+	Terminal  string              `json:"terminal,omitempty"`
+	Profile   string              `json:"profile,omitempty"`
+	Operation string              `json:"operation,omitempty"`
+	ID        string              `json:"id"`
+	Agent     string              `json:"agent"`
+	Image     string              `json:"image"`
+	Name      string              `json:"name,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
 }
 
 type record struct {
@@ -222,6 +224,11 @@ func validateID(id string) error {
 }
 
 func (m Metadata) validate() error {
+	if m.Workspace != nil {
+		if err := m.Workspace.Validate(); err != nil {
+			return err
+		}
+	}
 	if m.Terminal != "" && m.Terminal != "tmux" {
 		return fmt.Errorf("unsupported session terminal %q", m.Terminal)
 	}

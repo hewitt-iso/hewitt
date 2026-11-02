@@ -9,12 +9,14 @@ import (
 	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
 	"github.com/hewitt-iso/hewitt/profile"
+	"github.com/hewitt-iso/hewitt/workspace"
 )
 
 // AgentOptions describes one native client invocation. Run images must contain
 // tmux, env, and the selected CLI on PATH and support execution as the invoking host user's UID/GID.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
+	Repository, Base                     string
 }
 
 // RunAgent creates and starts a detached native agent with its persistent profile.
@@ -27,18 +29,24 @@ func RunAgent(ctx context.Context, opts AgentOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	command := append([]string{create.Entrypoint}, create.Command...)
-	create.Entrypoint = "tmux"
-	create.Command = docker.TerminalServerArgs()
-	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "run", "tmux")
+	worktree, err := workspace.Create(ctx, opts.DataDir, opts.Repository, opts.Base)
 	if err != nil {
 		return "", err
 	}
+	create.Workdir = worktree.Path
+	create.Mounts = append(create.Mounts, docker.BindMount{Source: worktree.Path, Target: worktree.Path}, docker.BindMount{Source: worktree.GitDir, Target: worktree.GitDir})
+	command := append([]string{create.Entrypoint}, create.Command...)
+	create.Entrypoint = "tmux"
+	create.Command = docker.TerminalServerArgs()
+	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "run", "tmux", &worktree)
+	if err != nil {
+		return "", fmt.Errorf("worktree %q (branch %s) preserved: %w", worktree.Path, worktree.Branch, err)
+	}
 	if err := (docker.Client{}).Start(ctx, metadata.ID); err != nil {
-		return "", err
+		return "", fmt.Errorf("worktree %q preserved: %w", worktree.Path, err)
 	}
 	if err := (docker.Client{}).StartTerminal(ctx, metadata.ID, command); err != nil {
-		return "", err
+		return "", fmt.Errorf("worktree %q preserved: %w", worktree.Path, err)
 	}
 	return metadata.ID, nil
 }

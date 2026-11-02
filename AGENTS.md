@@ -19,10 +19,12 @@ do not make separate API credits a prerequisite.
   reconnecting must not launch another agent. Preserve legacy Docker attachment
   for records without a terminal marker.
   Save metadata before startup; preserve and identify containers if saving fails.
-  Metadata deletion never removes containers or worktrees. Future session
-  management will also coordinate Git workspaces. Native agent invocation and
+  Metadata deletion never removes containers or worktrees. Run sessions create
+  Git workspaces and persist their locations before container startup. Native agent invocation and
   profile preparation already live in `agent` and `profile`. Add packages only with working behavior; do not create empty
   packages or speculative interfaces.
+- `workspace`: Git worktree creation on unique branches and safe removal that
+  refuses uncommitted, untracked, or ignored files and retains branches.
 - `agent`: native Claude Code and Codex run/login descriptions, independent of Cobra.
 - `profile`: private agent-scoped directories for native client state; credentials
   are managed by the native clients.

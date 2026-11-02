@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ import (
 
 func TestLoginUsesSelectedConfigAndProfile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PATH", dir)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	data := filepath.Join(dir, "custom-data")
 	configPath := filepath.Join(dir, "config.json")
 	encoded, err := json.Marshal(map[string]string{"data_dir": data})
@@ -75,13 +76,14 @@ func TestRun(t *testing.T) {
 		{name: "metadata failure", customDir: true, blockedDir: true, wantError: "startup not attempted", wantCalls: "create\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			runRepository(t)
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-			t.Setenv("PATH", dir)
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			t.Setenv("HEWITT_TEST_FAILURE", tt.failure)
 			dataDir := filepath.Join(dir, ".hewitt")
-			args := []string{"run", "codex", "--detach", "--image", "my-codex:local", "--name", "hewitt-test"}
+			args := []string{"run", "codex", "--detach", "--image", "my-codex:local", "--name", "hewitt-test", "--repo", ".", "--base", "HEAD"}
 			if tt.customDir {
 				dataDir = filepath.Join(dir, "custom-data")
 				cfg, err := json.Marshal(config.Config{DataDir: dataDir})
@@ -132,9 +134,17 @@ printf '%s\n' '` + containerID + `'
 			} else if err != nil || out != containerID+"\n" {
 				t.Fatalf("output = %q, error = %v", out, err)
 			}
+			commandErr := err
 			got, err := os.ReadFile(calls)
 			if err != nil || string(got) != tt.wantCalls {
 				t.Fatalf("Docker calls = %q, %v; want %q", got, err, tt.wantCalls)
+			}
+			worktrees, workErr := os.ReadDir(filepath.Join(dataDir, "worktrees"))
+			if workErr != nil || len(worktrees) != 1 {
+				t.Fatalf("worktree not preserved: %v, %v", worktrees, workErr)
+			}
+			if tt.wantError != "" && !strings.Contains(commandErr.Error(), filepath.Join(dataDir, "worktrees")) {
+				t.Fatalf("failure did not identify worktree: %v", commandErr)
 			}
 			if tt.blockedDir {
 				got, err := os.ReadFile(filepath.Join(dataDir, "sessions"))
@@ -178,7 +188,7 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		{args: []string{"run", "opencode", "--image", "test"}, want: "no implemented adapter"},
 		{args: []string{"login", "codex"}, want: `required flag(s) "image"`},
 		{args: []string{"login", "claude", "--image", "test", "--profile", ""}, want: "profile must"},
-		{args: []string{"run", "codex", "--image", "test"}, want: "Docker CLI is installed"},
+		{args: []string{"run", "codex", "--image", "test"}, want: "locate repository"},
 	} {
 		out, err := executeCommand(t, tt.args...)
 		if err == nil || !strings.Contains(err.Error(), tt.want) || out != "" {
@@ -189,7 +199,7 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--image", "--name", "Examples:", "no repository or host credentials are imported"} {
+	for _, want := range []string{"--image", "--name", "Examples:", "no host credentials are imported"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help = %q, want %q", out, want)
 		}
@@ -202,10 +212,11 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 func TestRunAttachesByDefault(t *testing.T) {
 	for _, failure := range []bool{false, true} {
 		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			runRepository(t)
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
-			t.Setenv("PATH", home)
+			t.Setenv("PATH", home+string(os.PathListSeparator)+os.Getenv("PATH"))
 			script := `#!/bin/sh
 case "$2" in
 create) printf '%s\n' '` + containerID + `' ;;
@@ -243,4 +254,19 @@ esac
 			}
 		})
 	}
+}
+
+func runRepository(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("prepare repository: %s: %v", out, err)
+		}
+	}
+	t.Chdir(dir)
 }

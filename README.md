@@ -9,13 +9,14 @@ their changes, and manage their environments from one CLI.
 subscription login flow with a dedicated persistent profile. `run` starts the
 native agent in a persistent tmux terminal inside Docker; `--detach` starts it in
 the background, and `attach` reconnects. `ps` lists saved sessions without Docker.
-Git worktrees and the remaining session commands are not implemented yet.
+Each run creates a Git worktree on its own branch. The remaining session
+commands are not implemented yet.
 
 ## Requirements
 
 - Linux or macOS
 - Go 1.26 or newer
-- Git to clone the repository
+- Git on PATH to create and manage session worktrees
 - Make and a C compiler for `make check` (Go's race detector requires CGO)
 
 Docker and agent accounts are not needed to build or run unit tests. Container
@@ -23,7 +24,7 @@ startup requires the Docker CLI on PATH and access to a running Docker Engine
 (Docker Desktop on macOS is one option). Hewitt uses the current Docker context
 and Docker environment settings; it does not start or manage the daemon.
 
-The planned MVP will add Git worktrees. Claude Code and Codex use their
+Claude Code and Codex use their
 official Claude/ChatGPT subscription authentication flows; separate API credits
 are not required. OpenCode is a planned adapter.
 
@@ -61,7 +62,7 @@ terminal definitions. Hewitt does not ship agent images yet.
 
 ```sh
 ./bin/hewitt login codex --image my-codex:local --profile personal
-./bin/hewitt run codex --image my-codex:local --profile personal
+./bin/hewitt run codex --image my-codex:local --profile personal --repo /path/to/repo
 # Detach with Ctrl-B then D, then reconnect:
 ./bin/hewitt ps
 ./bin/hewitt attach <full-session-id>
@@ -69,6 +70,14 @@ terminal definitions. Hewitt does not ship agent images yet.
 # Start without connecting a terminal:
 ./bin/hewitt run claude --image my-claude:local --profile personal --detach
 ```
+
+`run` uses the current directory's repository by default. Use `--repo PATH`
+for another checkout and `--base REF` to start at a specific commit, branch, or
+tag (default `HEAD`). The repository must have a commit. Each run creates
+`<data_dir>/worktrees/<random-id>` on a new `hewitt/<random-id>` branch.
+Uncommitted source changes are left alone and are not copied into the worktree.
+Linked source worktrees are supported; the shared Git directory is resolved.
+No existing branch is reset or reused. Login does not create a worktree.
 
 `--image` is required; `--name` optionally names the Docker container. Implemented
 adapters are `claude` and `codex`. Other agents fail explicitly. `--profile`
@@ -94,10 +103,15 @@ agent's terminal history. tmux history is held in container memory.
 
 Containers use an init process, open stdin, a TTY, and the label
 `io.hewitt.managed=true`. All Linux capabilities are dropped and
-`no-new-privileges` is enabled. Only the selected profile is mounted; Hewitt adds
-no repository mounts, host credential imports, Docker socket, published ports,
-host namespaces, or privileged mode. The native client runs as the invoking host
-UID/GID. Git worktrees are not created yet.
+`no-new-privileges` is enabled. The selected profile, worktree, and shared Git
+directory are mounted read/write. The worktree and Git directory use the same
+absolute paths inside and outside Docker so linked-worktree references work;
+the container starts in the worktree. Images need Git on PATH for Git operations.
+Agents can modify shared repository refs, objects, hooks, and configuration;
+worktrees isolate checkout files, not Git administration. Use repositories you
+trust, without credentials in Git configuration. Hewitt adds no host credential
+imports, Docker socket, published ports, host namespaces, or privileged mode.
+The native client runs as the invoking host UID/GID.
 
 The caller owns created containers. Errors during saving, startup, or terminal
 initialization identify the preserved container. Saving failure prevents startup;
@@ -105,6 +119,11 @@ later failures retain metadata. Cancellation interrupts local Docker clients
 without automatic deletion; Docker may already have completed the operation.
 A server initialization failure may leave a running container without an agent.
 Inspect failures before cleanup; `attach` never retries agent startup.
+Worktrees and branches are preserved on container creation, saving, or startup
+failure; errors identify their paths. There is no automatic worktree deletion.
+After stopping and removing the container, inspect the checkout before using
+`git -C /path/to/repo worktree remove /path/to/worktree`. Do not use `--force`
+if you need to preserve local files. Branches remain for committed-work recovery.
 
 ```sh
 docker ps -a --filter label=io.hewitt.managed=true
@@ -176,7 +195,7 @@ command name. Help bypasses configuration loading for every command.
 ```
 
 `data_dir` defaults to `$HOME/.hewitt` and holds session metadata written by `run`
-and read by `ps` and `attach`, with space reserved for future worktrees. It must be an absolute
+and read by `ps` and `attach`, and worktrees created by `run`. It must be an absolute
 path; `~` and environment
 variables are not expanded. Omitted fields retain defaults. Loading configuration
 creates no files or directories. Do not put credentials in this file.
@@ -195,12 +214,21 @@ Each record uses this versioned format:
   "profile": "personal",
   "operation": "run",
   "terminal": "tmux",
+  "workspace": {
+    "repository": "/path/to/repo",
+    "git_dir": "/path/to/repo/.git",
+    "path": "/absolute/path/to/hewitt-data/worktrees/example",
+    "branch": "hewitt/example"
+  },
   "image": "my-codex:local",
   "name": "hewitt-codex",
   "created_at": "2026-11-01T12:00:00Z"
 }
 ```
 
+`workspace` records the source checkout, shared Git directory, worktree path,
+and branch. It is absent for login and legacy sessions. These fields are saved
+before container startup; attachment does not create another worktree.
 `name` is omitted when no container name was supplied. `profile` and `operation`
 identify native client invocations. `terminal: "tmux"` selects persistent terminal
 attachment; absent terminal fields select legacy Docker attachment. Unknown
@@ -273,6 +301,7 @@ docker/                    Docker CLI runtime and lifecycle tests
 session/                   Local metadata, native profiles, startup, and attachment
 agent/                     Native Claude Code and Codex invocation descriptions
 profile/                   Private persistent native client directories
+workspace/                 Git worktree creation and safe removal
 .github/workflows/ci.yml    Linux and macOS checks
 AGENTS.md                  Instructions for coding agents
 Makefile                   Development commands
@@ -281,7 +310,7 @@ Makefile                   Development commands
 Hewitt is a modular monolith. `main` owns signals and exit status; `cmd` owns flags
 and output; `config` owns non-secret preferences; `docker` owns Docker subprocess
 execution and isolation defaults; `session` owns metadata and coordinates
-create/save/start, terminal initialization, and attachment lookup. Cobra provides CLI parsing;
+worktree creation, create/save/start, terminal initialization, and attachment lookup. Cobra provides CLI parsing;
 `golang.org/x/term` provides terminal restoration after attachment cancellation.
 The foreground server and reconnect behavior follow the [tmux manual](https://github.com/tmux/tmux/blob/master/tmux.1).
 The concrete Docker client accepts contexts and returns errors. Attachment
@@ -311,7 +340,7 @@ return a "not implemented yet" error and exit with status 1.
 
 | Command | Planned capability |
 | --- | --- |
-| `hewitt run <agent>` | Run a native agent in a persistent terminal; add worktrees later |
+| `hewitt run <agent>` | Run a native agent in a persistent terminal and a new Git worktree |
 | `hewitt stop <session>` | Stop a session |
 | `hewitt rm <session>` | Remove a session and safely clean up its resources |
 | `hewitt logs <session>` | Read session output |
@@ -324,5 +353,8 @@ nonempty session identifier. `attach` validates the full ID and saved record;
 identifier format and existence checks for the remaining commands will be added
 with session management.
 
-The next development step is Git worktree management with tests against temporary
-repositories, including safeguards against removing uncommitted user work.
+The `workspace` package creates worktrees and offers a safe removal API. Removal
+checks the repository and exact checkout path, refuses modified, untracked, or
+ignored files, uses Git without force, and retains the branch. It is not yet
+exposed through session `rm`; metadata deletion still removes only JSON files.
+Tests use temporary repositories and fake Docker executables.
