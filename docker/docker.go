@@ -245,12 +245,54 @@ func (c Client) Running(ctx context.Context, id string) (bool, error) {
 	}
 	out, err := c.execute(ctx, "container", "inspect", "--format", "{{.State.Running}}", "--", id)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such container") || strings.Contains(err.Error(), "no such container") {
+		if notFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect container %q: %w", id, err)
 	}
 	return strings.TrimSpace(out) == "true", nil
+}
+
+// Stop stops a running container, preserving it. Stopping a stopped container
+// succeeds; a missing container is reported.
+func (c Client) Stop(ctx context.Context, id string) error {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "container", "stop", "--", id); err != nil {
+		return fmt.Errorf("stop container %q: %w", id, err)
+	}
+	return nil
+}
+
+// Remove deletes a stopped container. Docker refuses running containers; the
+// removal is never forced. A container that no longer exists is not an error.
+func (c Client) Remove(ctx context.Context, id string) error {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "container", "rm", "--", id); err != nil && !notFound(err) {
+		return fmt.Errorf("remove container %q: %w", id, err)
+	}
+	return nil
+}
+
+// RemoveNetwork deletes a network with no attached containers. A missing
+// network is not an error.
+func (c Client) RemoveNetwork(ctx context.Context, name string) error {
+	if err := validateArgument("network name", name); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "network", "rm", "--", name); err != nil && !notFound(err) {
+		return fmt.Errorf("remove network %q: %w", name, err)
+	}
+	return nil
+}
+
+func notFound(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such container") || strings.Contains(message, "no such network") ||
+		strings.Contains(message, "not found")
 }
 
 // Start starts a container by ID or name without attaching to it. Success means

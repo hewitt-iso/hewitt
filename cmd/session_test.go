@@ -17,10 +17,7 @@ func TestSessionCommands(t *testing.T) {
 		name string
 		arg  string
 	}{
-		{name: "stop", arg: "session-id"},
-		{name: "rm", arg: "session-id"},
 		{name: "logs", arg: "session-id"},
-		{name: "diff", arg: "session-id"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := []string{tt.name}

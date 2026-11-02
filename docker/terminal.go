@@ -58,6 +58,35 @@ func (c Client) StartExternalTerminal(ctx context.Context, id, socket, workdir s
 	return nil
 }
 
+// StopExternalTerminal ends the tmux server, and with it the agent, that
+// Hewitt started in an external container. The container itself is untouched.
+func (c Client) StopExternalTerminal(ctx context.Context, id, socket string) error {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if err := validateSocket(socket); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "container", "exec", "--", id, "tmux", "-N", "-S", socket, "kill-server"); err != nil {
+		return fmt.Errorf("stop agent terminal in external container %q: %w", id, err)
+	}
+	return nil
+}
+
+// ExternalTerminalRunning reports whether that tmux server still answers.
+// A stopped or missing container counts as not running.
+func (c Client) ExternalTerminalRunning(ctx context.Context, id, socket string) (bool, error) {
+	running, err := c.Running(ctx, id)
+	if err != nil || !running {
+		return false, err
+	}
+	if err := validateSocket(socket); err != nil {
+		return false, err
+	}
+	_, err = c.execute(ctx, "container", "exec", "--", id, "tmux", "-N", "-S", socket, "has-session", "-t", "=hewitt")
+	return err == nil, nil
+}
+
 func validateSocket(socket string) error {
 	if !strings.HasPrefix(socket, "/tmp/hewitt-") || strings.ContainsFunc(socket[len("/tmp/hewitt-"):], func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.')

@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,8 @@ type Worktree struct {
 	GitDir     string `json:"git_dir"`
 	Path       string `json:"path"`
 	Branch     string `json:"branch"`
+	// Base is the commit the branch started from; empty in older records.
+	Base string `json:"base,omitempty"`
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
@@ -76,7 +80,7 @@ func Create(ctx context.Context, dataDir, repository, base string) (Worktree, er
 		return Worktree{}, err
 	}
 	token := strings.ToLower(rand.Text())
-	w := Worktree{Repository: repo, GitDir: common, Path: filepath.Join(root, token), Branch: "hewitt/" + token}
+	w := Worktree{Repository: repo, GitDir: common, Path: filepath.Join(root, token), Branch: "hewitt/" + token, Base: commit}
 	if err := w.Validate(); err != nil {
 		return w, err
 	}
@@ -102,6 +106,17 @@ func (w Worktree) Validate() error {
 // Remove refuses modified, untracked, or ignored files and never forces removal.
 // The branch remains available for recovery of committed work.
 func Remove(ctx context.Context, w Worktree) error {
+	if err := CheckRemovable(ctx, w); err != nil {
+		return err
+	}
+	if _, err := git(ctx, w.GitDir, "worktree", "remove", "--", w.Path); err != nil {
+		return fmt.Errorf("remove worktree: %w", err)
+	}
+	return nil
+}
+
+// CheckRemovable reports why Remove would refuse, without changing anything.
+func CheckRemovable(ctx context.Context, w Worktree) error {
 	if err := w.Validate(); err != nil {
 		return err
 	}
@@ -134,8 +149,52 @@ func Remove(ctx context.Context, w Worktree) error {
 	if status != "" {
 		return fmt.Errorf("worktree %q has uncommitted, untracked, or ignored files", w.Path)
 	}
-	if _, err := git(ctx, w.GitDir, "worktree", "remove", "--", w.Path); err != nil {
-		return fmt.Errorf("remove worktree: %w", err)
+	return nil
+}
+
+// Diff writes the worktree's changes since its base commit: commits on the
+// session branch, uncommitted edits, and untracked files that are not ignored.
+// It reads only; the index and files are unchanged.
+func Diff(ctx context.Context, w Worktree, out io.Writer) error {
+	if err := w.Validate(); err != nil {
+		return err
+	}
+	if w.Base == "" {
+		return fmt.Errorf("session predates recorded base commits; inspect with git -C %s diff", w.Path)
+	}
+	if err := gitStream(ctx, out, w.Path, "diff", w.Base, "--"); err != nil {
+		return err
+	}
+	untracked, err := git(ctx, w.Path, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return err
+	}
+	for _, file := range strings.Split(untracked, "\x00") {
+		if file == "" {
+			continue
+		}
+		if err := gitStream(ctx, out, w.Path, "diff", "--no-index", "--", os.DevNull, file); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gitStream writes Git's output to out. Exit status 1 means "differences" for
+// diff commands and is not an error.
+func gitStream(ctx context.Context, out io.Writer, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = out, &stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && stderr.Len() == 0 {
+			return nil
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
