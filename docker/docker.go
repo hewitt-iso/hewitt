@@ -24,20 +24,33 @@ type Client struct{}
 
 // CreateOptions describes a container. Host access requires explicit mounts.
 type CreateOptions struct {
-	Image       string
-	Name        string
-	Command     []string
-	Entrypoint  string
-	Env         []string
+	Image      string
+	Name       string
+	Command    []string
+	Entrypoint string
+	Env        []string
+	// EnvFiles are read by the Docker CLI; explicit Env entries take precedence.
+	EnvFiles    []string
 	Mounts      []BindMount
 	User        string
 	Workdir     string
 	DisableLogs bool
 	DisableTTY  bool
+	// ReadOnlyRoot mounts the image filesystem read-only with a private /tmp.
+	ReadOnlyRoot bool
+	// Network is passed to --network when set, for example none or container:<id>.
+	Network string
+	// Runtime selects an installed OCI runtime such as runsc.
+	Runtime string
+	// Resource limits are applied only when set, using Docker's value syntax.
+	Memory, CPUs, PIDs string
 }
 
 // BindMount grants access to one explicitly selected host directory.
-type BindMount struct{ Source, Target string }
+type BindMount struct {
+	Source, Target string
+	ReadOnly       bool
+}
 
 // Validate checks options before any filesystem or Docker side effects.
 func (opts CreateOptions) Validate() error {
@@ -49,7 +62,10 @@ func (opts CreateOptions) Validate() error {
 			return err
 		}
 	}
-	for _, value := range []struct{ name, value string }{{"entrypoint", opts.Entrypoint}, {"user", opts.User}} {
+	for _, value := range []struct{ name, value string }{
+		{"entrypoint", opts.Entrypoint}, {"user", opts.User}, {"network", opts.Network}, {"runtime", opts.Runtime},
+		{"memory limit", opts.Memory}, {"CPU limit", opts.CPUs}, {"PIDs limit", opts.PIDs},
+	} {
 		if value.value != "" {
 			if err := validateArgument(value.name, value.value); err != nil {
 				return err
@@ -68,6 +84,11 @@ func (opts CreateOptions) Validate() error {
 			if !(c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9') {
 				return fmt.Errorf("invalid container environment key")
 			}
+		}
+	}
+	for _, file := range opts.EnvFiles {
+		if !filepath.IsAbs(file) || strings.ContainsAny(file, "\x00\r\n") {
+			return fmt.Errorf("container env file must be an absolute path")
 		}
 	}
 	for _, mount := range opts.Mounts {
@@ -115,11 +136,29 @@ func (c Client) Create(ctx context.Context, opts CreateOptions) (string, error) 
 	if opts.Workdir != "" {
 		args = append(args, "--workdir", opts.Workdir)
 	}
+	if opts.ReadOnlyRoot {
+		args = append(args, "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777")
+	}
+	for _, flag := range []struct{ name, value string }{
+		{"--network", opts.Network}, {"--runtime", opts.Runtime},
+		{"--memory", opts.Memory}, {"--cpus", opts.CPUs}, {"--pids-limit", opts.PIDs},
+	} {
+		if flag.value != "" {
+			args = append(args, flag.name, flag.value)
+		}
+	}
+	for _, file := range opts.EnvFiles {
+		args = append(args, "--env-file", file)
+	}
 	for _, env := range opts.Env {
 		args = append(args, "--env", env)
 	}
 	for _, mount := range opts.Mounts {
-		args = append(args, "--mount", "type=bind,src="+mount.Source+",dst="+mount.Target)
+		spec := "type=bind,src=" + mount.Source + ",dst=" + mount.Target
+		if mount.ReadOnly {
+			spec += ",readonly"
+		}
+		args = append(args, "--mount", spec)
 	}
 	args = append(args, "--", opts.Image)
 	args = append(args, opts.Command...)
@@ -132,6 +171,36 @@ func (c Client) Create(ctx context.Context, opts CreateOptions) (string, error) 
 		return "", fmt.Errorf("create container: Docker returned an invalid container ID; inspect containers with label io.hewitt.managed=true")
 	}
 	return id, nil
+}
+
+// CreateNetwork creates a labeled network and returns its ID. An internal
+// network has no route outside Docker. The caller owns and removes it.
+func (c Client) CreateNetwork(ctx context.Context, name string, internal bool) (string, error) {
+	if err := validateArgument("network name", name); err != nil {
+		return "", err
+	}
+	args := []string{"network", "create", "--label", "io.hewitt.managed=true"}
+	if internal {
+		args = append(args, "--internal")
+	}
+	out, err := c.execute(ctx, append(args, "--", name)...)
+	if err != nil {
+		return "", fmt.Errorf("create network %q: %w", name, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// ConnectNetwork attaches a container to a network under alias.
+func (c Client) ConnectNetwork(ctx context.Context, network, id, alias string) error {
+	for _, value := range []struct{ name, value string }{{"network", network}, {"container ID or name", id}, {"network alias", alias}} {
+		if err := validateArgument(value.name, value.value); err != nil {
+			return err
+		}
+	}
+	if _, err := c.execute(ctx, "network", "connect", "--alias", alias, "--", network, id); err != nil {
+		return fmt.Errorf("connect container %q to network %q (both preserved): %w", id, network, err)
+	}
+	return nil
 }
 
 // StartAttached streams directly to the terminal without recording login output.
@@ -166,6 +235,22 @@ func (c Client) StartAttached(ctx context.Context, id string, in io.Reader, out,
 		return fmt.Errorf("container %q exited with status %d (container preserved)", id, state.ExitCode)
 	}
 	return nil
+}
+
+// Running reports whether a container is running. A container Docker no
+// longer knows is reported as not running.
+func (c Client) Running(ctx context.Context, id string) (bool, error) {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return false, err
+	}
+	out, err := c.execute(ctx, "container", "inspect", "--format", "{{.State.Running}}", "--", id)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such container") || strings.Contains(err.Error(), "no such container") {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect container %q: %w", id, err)
+	}
+	return strings.TrimSpace(out) == "true", nil
 }
 
 // Start starts a container by ID or name without attaching to it. Success means

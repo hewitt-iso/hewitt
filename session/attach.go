@@ -14,6 +14,9 @@ func Attach(ctx context.Context, store *Store, id string, stdin io.Reader, stdou
 	if err != nil {
 		return err
 	}
+	if m.Mode == "exec" {
+		return (docker.Client{}).AttachTerminalSocket(ctx, m.Container, m.Socket, stdin, stdout, stderr)
+	}
 	if m.Terminal == "tmux" {
 		return (docker.Client{}).AttachTerminal(ctx, m.ID, stdin, stdout, stderr)
 	}

@@ -87,8 +87,8 @@ func TestSessionCommandInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "claude requires image", args: []string{"run", "claude"}, want: "required flag(s)"},
-		{name: "opencode requires image", args: []string{"run", "opencode"}, want: "required flag(s)"},
+		{name: "claude requires image", args: []string{"run", "claude"}, want: "select an image"},
+		{name: "opencode requires image", args: []string{"run", "opencode"}, want: "select an image"},
 		{name: "unsupported agent", args: []string{"run", "unknown"}, want: "invalid argument"},
 		{name: "empty agent", args: []string{"run", ""}, want: "invalid argument"},
 		{name: "unknown flag", args: []string{"logs", "session-id", "--unknown"}, want: "unknown flag"},
