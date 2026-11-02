@@ -185,7 +185,7 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		{args: []string{"run", "codex", "--image=--privileged"}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--name", "bad name"}, want: "container name must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--profile", "../escape"}, want: "profile must"},
-		{args: []string{"run", "opencode", "--image", "test"}, want: "no implemented adapter"},
+		{args: []string{"run", "gemini", "--image", "test"}, want: "no implemented adapter"},
 		{args: []string{"login", "codex"}, want: `required flag(s) "image"`},
 		{args: []string{"login", "claude", "--image", "test", "--profile", ""}, want: "profile must"},
 		{args: []string{"run", "codex", "--image", "test"}, want: "locate repository"},

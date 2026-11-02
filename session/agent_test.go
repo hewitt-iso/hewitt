@@ -99,7 +99,7 @@ esac
 
 func TestPreparationRejectsInvalidInputBeforeCreatingProfile(t *testing.T) {
 	for _, opts := range []AgentOptions{
-		{Agent: "opencode", Image: "test", Profile: "default"},
+		{Agent: "gemini", Image: "test", Profile: "default"},
 		{Agent: "codex", Image: "--privileged", Profile: "default"},
 		{Agent: "claude", Image: "test", Profile: "../escape"},
 	} {
