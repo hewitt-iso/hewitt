@@ -285,3 +285,25 @@ func TestConcurrentSaveAndRead(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestTerminalMetadataCompatibility(t *testing.T) {
+	store := testStore(t)
+	m := testMetadata()
+	for _, terminal := range []string{"", "tmux"} {
+		m.Terminal = terminal
+		if err := store.Save(m); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := NewStore(store.dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := reopened.Get(m.ID); err != nil || got.Terminal != terminal {
+			t.Fatalf("terminal = %q, %v", got.Terminal, err)
+		}
+	}
+	m.Terminal = "unknown"
+	if err := store.Save(m); err == nil {
+		t.Fatal("accepted unsupported terminal")
+	}
+}

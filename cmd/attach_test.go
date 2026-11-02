@@ -23,7 +23,7 @@ func TestAttach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := session.Metadata{ID: containerID, Agent: "codex", Image: "codex:local", CreatedAt: time.Now().UTC()}
+	m := session.Metadata{Terminal: "tmux", ID: containerID, Agent: "codex", Image: "codex:local", CreatedAt: time.Now().UTC()}
 	if err := store.Save(m); err != nil {
 		t.Fatal(err)
 	}

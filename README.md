@@ -5,13 +5,11 @@ containers, each with its own Git worktree and persistent terminal session.
 The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
-**Status:** early development. `run` creates a Docker container from an explicit
-image, saves local session metadata, and starts the container. `ps` lists saved
-sessions without requiring Docker. `attach` connects to a running container
-terminal. Help, version, configuration, and command
-argument validation work. Agent installation and
-authentication, Git worktrees, terminal multiplexing, and the other session
-commands are not implemented yet.
+**Status:** early development. `login` uses the native Claude Code or Codex
+subscription login flow with a dedicated persistent profile. `run` starts the
+native agent in a persistent tmux terminal inside Docker; `--detach` starts it in
+the background, and `attach` reconnects. `ps` lists saved sessions without Docker.
+Git worktrees and the remaining session commands are not implemented yet.
 
 ## Requirements
 
@@ -25,9 +23,9 @@ startup requires the Docker CLI on PATH and access to a running Docker Engine
 (Docker Desktop on macOS is one option). Hewitt uses the current Docker context
 and Docker environment settings; it does not start or manage the daemon.
 
-The planned MVP will use Git worktrees. Claude Code and Codex
-will use their official Claude/ChatGPT subscription authentication flows;
-separate API credits must not be required. OpenCode is also a planned adapter.
+The planned MVP will add Git worktrees. Claude Code and Codex use their
+official Claude/ChatGPT subscription authentication flows; separate API credits
+are not required. OpenCode is a planned adapter.
 
 ## Build and run
 
@@ -55,49 +53,62 @@ make build VERSION=v0.1.0
 The default version is `dev`. Without Make, use `go build -o bin/hewitt .` or
 `go run . --help`.
 
-## Create and start a container
+## Create and start a session
 
-Supply an image whose default entrypoint and command launch your chosen agent:
+Supply an image containing `tmux` (3.3 or newer), `env`, and the selected native
+CLI on PATH. The image must support the host user's UID/GID and include its
+terminal definitions. Hewitt does not ship agent images yet.
 
 ```sh
-./bin/hewitt run codex --image my-codex:local --name hewitt-codex
+./bin/hewitt login codex --image my-codex:local --profile personal
+./bin/hewitt run codex --image my-codex:local --profile personal
+# Detach with Ctrl-B then D, then reconnect:
+./bin/hewitt ps
+./bin/hewitt attach <full-session-id>
+
+# Start without connecting a terminal:
+./bin/hewitt run claude --image my-claude:local --profile personal --detach
 ```
 
-`my-codex:local` is an example name for an image you provide; Hewitt does not yet
-ship agent images. `--image` is required and `--name` is optional. The agent
-argument accepts `claude`, `codex`, or `opencode`; it records your intent in local
-session metadata but does not select an executable or verify the image's contents.
-Hewitt runs the image's default command. It does not install agents, supply login
-state, mount your repository, or create a Git worktree yet.
+`--image` is required; `--name` optionally names the Docker container. Implemented
+adapters are `claude` and `codex`. Other agents fail explicitly. `--profile`
+defaults to `default` and selects an agent-scoped directory under
+`<data_dir>/profiles`. Login uses the official native subscription flow; Codex
+uses device authentication and a file credential store. No separate API credits
+are required. Native credentials remain in the private profile directory; do not
+use one profile concurrently or commit it. Login output is not recorded by Docker.
 
-The runtime uses [`docker container create`](https://docs.docker.com/reference/cli/docker/container/create/)
-followed by [`docker container start`](https://docs.docker.com/reference/cli/docker/container/start/).
-Docker pulls the image if it is missing. Containers get an init process, open
-stdin, a TTY, and the label `io.hewitt.managed=true`. They run with all Linux
-capabilities dropped and `no-new-privileges` enabled. Hewitt adds no host mounts,
-credentials, published ports, host namespaces, or privileged mode. The image's
-user and Docker's default network are retained.
+`run` saves metadata before startup, starts a foreground tmux server inside the
+container, and launches the native agent once in a detached tmux session. It
+attaches by default, reporting the session ID and reconnect command to stderr.
+`--detach` (or `-d`) prints only the full session ID to stdout. Noninteractive
+callers should use `--detach`; interactive attachment requires a terminal.
 
-On successful startup, stdout contains only the container ID. This means Docker
-accepted the start request, not that the agent is ready or will keep running.
-The container's lifetime follows the image's command; a command that finishes
-immediately leaves an exited container. Use `hewitt attach <full-session-id>` to
-connect to the running process.
-Terminal multiplexing inside the container is not implemented.
+The container and agent continue running when a client detaches or Hewitt is
+cancelled. Reconnecting restores the same screen and tmux scrollback and never
+starts another agent. When the agent exits, its final screen remains available;
+the container stays running until explicitly stopped. This is process persistence
+across client disconnections, not recovery across container stops, Docker daemon
+restarts, or host reboots. Docker logs contain server diagnostics rather than the
+agent's terminal history. tmux history is held in container memory.
 
-The caller owns created containers. If startup fails, the error identifies the
-preserved container so you can inspect or retry it. Cancellation interrupts the
-Docker CLI, but Docker may already have created or started the container. No
-automatic deletion is performed. Metadata is saved after creation and before
-startup, so failed starts retain their records. If saving metadata fails, startup
-is not attempted; the error identifies the preserved container for recovery.
-Use `hewitt ps` to list saved sessions. For live container status and lifecycle
-operations, use Docker directly:
+Containers use an init process, open stdin, a TTY, and the label
+`io.hewitt.managed=true`. All Linux capabilities are dropped and
+`no-new-privileges` is enabled. Only the selected profile is mounted; Hewitt adds
+no repository mounts, host credential imports, Docker socket, published ports,
+host namespaces, or privileged mode. The native client runs as the invoking host
+UID/GID. Git worktrees are not created yet.
+
+The caller owns created containers. Errors during saving, startup, or terminal
+initialization identify the preserved container. Saving failure prevents startup;
+later failures retain metadata. Cancellation interrupts local Docker clients
+without automatic deletion; Docker may already have completed the operation.
+A server initialization failure may leave a running container without an agent.
+Inspect failures before cleanup; `attach` never retries agent startup.
 
 ```sh
 docker ps -a --filter label=io.hewitt.managed=true
 docker logs <container-id>
-docker start <container-id>   # Retry a failed start
 docker stop <container-id>
 docker rm <container-id>      # Remove after stopping and inspecting
 ```
@@ -127,20 +138,22 @@ metadata could not be saved do not appear.
 ./bin/hewitt attach <full-session-id>
 ```
 
-`attach` reads the saved record from the configured `data_dir` (including when
-selected with `--config`) and connects stdin, stdout, and stderr using
-[`docker container attach`](https://docs.docker.com/reference/cli/docker/container/attach/).
+`attach` reads the saved record from the configured `data_dir` and connects to
+the existing tmux session using `docker container exec --interactive --tty`.
 Use the full ID printed by `run` or `ps`; names and abbreviated IDs are not
-accepted. Interactive input requires a terminal. Docker handles terminal mode and
-resizing; Hewitt also restores terminal settings after cancellation.
+accepted. Docker handles terminal mode and resizing; Hewitt restores terminal
+settings after cancellation. Attachment uses the `xterm-256color` terminal type.
 
-Press **Ctrl-P, Ctrl-Q** to detach and leave the container running. Ctrl-C may
-interrupt the process inside the container. Attachment connects to the image's
-existing process; it does not launch a new shell or replay past output. Stopped,
-removed, or unavailable containers produce Docker errors. No automatic startup,
-cleanup, or metadata changes occur. Docker diagnostics and container stderr go to
-stderr; container stdout goes to stdout. Cancelling Hewitt disconnects the local
-Docker client with signal proxying disabled.
+Press **Ctrl-B, D** to detach and leave the agent running. Ctrl-C may interrupt
+the agent. Use tmux copy mode (**Ctrl-B, [**) to inspect scrollback. Each reconnect
+attaches to the same terminal, including its final screen after the agent exits.
+Attachment never starts stopped containers, creates terminals, launches agents,
+or changes metadata. Removed or unavailable containers produce Docker errors.
+
+Older metadata without a `terminal` field retains direct Docker attachment and
+the **Ctrl-P, Ctrl-Q** detach sequence, without tmux history. Login containers
+also retain direct Docker attachment. Output goes to command-provided streams;
+Docker diagnostics go to stderr.
 
 ## Configuration
 
@@ -163,7 +176,7 @@ command name. Help bypasses configuration loading for every command.
 ```
 
 `data_dir` defaults to `$HOME/.hewitt` and holds session metadata written by `run`
-and read by `ps`, with space reserved for future worktrees. It must be an absolute
+and read by `ps` and `attach`, with space reserved for future worktrees. It must be an absolute
 path; `~` and environment
 variables are not expanded. Omitted fields retain defaults. Loading configuration
 creates no files or directories. Do not put credentials in this file.
@@ -179,13 +192,19 @@ Each record uses this versioned format:
   "version": 1,
   "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "agent": "codex",
+  "profile": "personal",
+  "operation": "run",
+  "terminal": "tmux",
   "image": "my-codex:local",
   "name": "hewitt-codex",
   "created_at": "2026-11-01T12:00:00Z"
 }
 ```
 
-`name` is omitted when no container name was supplied. Records describe creation
+`name` is omitted when no container name was supplied. `profile` and `operation`
+identify native client invocations. `terminal: "tmux"` selects persistent terminal
+attachment; absent terminal fields select legacy Docker attachment. Unknown
+terminal values are rejected. The version remains 1 for backward compatibility. Records describe creation
 intent, not live container status or agent readiness. They contain no credentials,
 agent prompts, or login state. Docker operations performed outside Hewitt do not
 update these records, and metadata written before a failed start remains present.
@@ -230,7 +249,15 @@ HEWITT_TEST_IMAGE=your-local-test-image go test -tags=integration ./docker -run 
 ```
 
 This test can pull the selected image, creates and starts one container, verifies
-its state, and removes that container and its anonymous volumes afterward. It is
+its state, and removes that container and its anonymous volumes afterward.
+To also test persistent terminal startup, two client reconnects, and retained
+output after agent exit, select an image with `tmux`, `env`, `sh`, and `sleep`:
+
+```sh
+HEWITT_TEST_IMAGE=your-local-tmux-image go test -tags=integration ./docker -run TestPersistentTerminal -v
+```
+
+Each test cleans up only its own container. It is
 excluded from normal checks and skips when `HEWITT_TEST_IMAGE` is unset.
 
 ## Structure and architecture
@@ -243,7 +270,9 @@ main.go                    Process entry point and build version
 cmd/                       Cobra command construction and CLI tests
 config/                    Config loading, defaults, validation, and tests
 docker/                    Docker CLI runtime and lifecycle tests
-session/                   Local metadata storage and recorded container startup
+session/                   Local metadata, native profiles, startup, and attachment
+agent/                     Native Claude Code and Codex invocation descriptions
+profile/                   Private persistent native client directories
 .github/workflows/ci.yml    Linux and macOS checks
 AGENTS.md                  Instructions for coding agents
 Makefile                   Development commands
@@ -252,20 +281,21 @@ Makefile                   Development commands
 Hewitt is a modular monolith. `main` owns signals and exit status; `cmd` owns flags
 and output; `config` owns non-secret preferences; `docker` owns Docker subprocess
 execution and isolation defaults; `session` owns metadata and coordinates
-create/save/start and attachment lookup. Cobra provides CLI parsing;
+create/save/start, terminal initialization, and attachment lookup. Cobra provides CLI parsing;
 `golang.org/x/term` provides terminal restoration after attachment cancellation.
+The foreground server and reconnect behavior follow the [tmux manual](https://github.com/tmux/tmux/blob/master/tmux.1).
 The concrete Docker client accepts contexts and returns errors. Attachment
 streams container output and Docker diagnostics to the supplied writers.
 
-As features arrive, add focused packages with these boundaries:
+Extend focused packages with these boundaries as features arrive:
 
 | Component | Responsibility |
 | --- | --- |
 | Session management | Extend the existing `session` package with lifecycle coordination |
 | Container runtime | Extend the existing `docker` package with lifecycle operations and workspace mounts |
 | Git workspaces | Create, inspect, and safely remove Git worktrees |
-| Agent adapters | Agent-specific launch commands and capabilities |
-| Authentication | Official login flows and credential lifecycle |
+| Agent adapters | Extend `agent` with native launch commands and capabilities |
+| Authentication | Native login flows with private directories managed by `profile` |
 
 Session management coordinates the other components without depending on
 Cobra. Keep runtime and workspace operations out of command handlers. Add small
@@ -281,13 +311,14 @@ return a "not implemented yet" error and exit with status 1.
 
 | Command | Planned capability |
 | --- | --- |
-| `hewitt run <agent>` | Add agent setup, worktrees, and persistent sessions to container startup |
+| `hewitt run <agent>` | Run a native agent in a persistent terminal; add worktrees later |
 | `hewitt stop <session>` | Stop a session |
 | `hewitt rm <session>` | Remove a session and safely clean up its resources |
 | `hewitt logs <session>` | Read session output |
 | `hewitt diff <session>` | Inspect worktree changes |
 
-`run` requires exactly one agent name and `--image`.
+`run` and `login` require exactly one agent name and `--image`. `run --detach`
+starts without attaching.
 `ps` accepts no positional arguments. All other commands require exactly one
 nonempty session identifier. `attach` validates the full ID and saved record;
 identifier format and existence checks for the remaining commands will be added

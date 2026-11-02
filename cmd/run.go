@@ -10,13 +10,14 @@ import (
 
 func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	var image, name, profile string
+	var detach bool
 	short := "Start an agent container with a persistent native profile"
 	if action == "login" {
 		short = "Log in to a subscription using the native agent in a container"
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nThe image must contain env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no repository or host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nDo not use one profile concurrently. Use hewitt attach to connect to a running container.\nWorktrees and terminal multiplexing are not implemented.",
+		Long:      short + ".\n\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no repository or host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nDo not use one profile concurrently. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nWorktrees are not implemented.",
 		Example:   "  hewitt " + action + " codex --image my-codex:local --profile personal",
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
@@ -29,9 +30,22 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
-			return err
+			if detach {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-B then D; reconnect with hewitt attach %s\n", id, id); err != nil {
+				return fmt.Errorf("report session %q (container preserved): %w", id, err)
+			}
+			store, err := session.NewStore(cfg.DataDir)
+			if err != nil {
+				return err
+			}
+			return session.Attach(cmd.Context(), store, id, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
+	}
+	if action == "run" {
+		cmd.Flags().BoolVarP(&detach, "detach", "d", false, "start without attaching; print the session ID")
 	}
 	cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (required)")
 	cmd.Flags().StringVar(&name, "name", "", "optional Docker container name")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,10 +68,10 @@ func TestRun(t *testing.T) {
 		customDir  bool
 		blockedDir bool
 	}{
-		{name: "success", wantCalls: "create\nstart\n"},
+		{name: "success", wantCalls: "create\nstart\nexec\nexec\nexec\n"},
 		{name: "create failure", failure: "create", wantError: "create container", wantCalls: "create\n"},
 		{name: "start failure", failure: "start", wantError: "container preserved", wantCalls: "create\nstart\n"},
-		{name: "custom data directory", customDir: true, wantCalls: "create\nstart\n"},
+		{name: "custom data directory", customDir: true, wantCalls: "create\nstart\nexec\nexec\nexec\n"},
 		{name: "metadata failure", customDir: true, blockedDir: true, wantError: "startup not attempted", wantCalls: "create\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,7 +81,7 @@ func TestRun(t *testing.T) {
 			t.Setenv("PATH", dir)
 			t.Setenv("HEWITT_TEST_FAILURE", tt.failure)
 			dataDir := filepath.Join(dir, ".hewitt")
-			args := []string{"run", "codex", "--image", "my-codex:local", "--name", "hewitt-test"}
+			args := []string{"run", "codex", "--detach", "--image", "my-codex:local", "--name", "hewitt-test"}
 			if tt.customDir {
 				dataDir = filepath.Join(dir, "custom-data")
 				cfg, err := json.Marshal(config.Config{DataDir: dataDir})
@@ -151,7 +152,7 @@ printf '%s\n' '` + containerID + `'
 				if !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("create failure wrote metadata: %+v, %v", m, err)
 				}
-			} else if err != nil || m.ID != containerID || m.Agent != "codex" || m.Image != "my-codex:local" || m.Name != "hewitt-test" || m.CreatedAt.Before(before) || m.CreatedAt.After(time.Now()) {
+			} else if err != nil || m.Terminal != "tmux" || m.ID != containerID || m.Agent != "codex" || m.Image != "my-codex:local" || m.Name != "hewitt-test" || m.CreatedAt.Before(before) || m.CreatedAt.After(time.Now()) {
 				t.Fatalf("saved metadata = %+v, %v", m, err)
 			}
 		})
@@ -195,5 +196,51 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 	}
 	if _, err := executeCommand(t, "login", "--help", "--config", filepath.Join(home, "missing.json")); err != nil {
 		t.Fatalf("login help requires configuration: %v", err)
+	}
+}
+
+func TestRunAttachesByDefault(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			t.Setenv("PATH", home)
+			script := `#!/bin/sh
+case "$2" in
+create) printf '%s\n' '` + containerID + `' ;;
+exec) case "$*" in
+ *attach-session*) printf 'existing agent screen'; `
+			if failure {
+				script += "exit 17"
+			}
+			script += ` ;;
+esac ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var out, diagnostics bytes.Buffer
+			root := NewRootCommand("test")
+			root.SetOut(&out)
+			root.SetErr(&diagnostics)
+			root.SetIn(strings.NewReader(""))
+			root.SetArgs([]string{"run", "codex", "--image", "agent:test"})
+			err := root.Execute()
+			if (err != nil) != failure {
+				t.Fatalf("error = %v", err)
+			}
+			if out.String() != "existing agent screen" || !strings.Contains(diagnostics.String(), containerID) {
+				t.Fatalf("streams %q %q", out.String(), diagnostics.String())
+			}
+			store, err := session.NewStore(filepath.Join(home, ".hewitt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m, err := store.Get(containerID); err != nil || m.Terminal != "tmux" {
+				t.Fatalf("preserved record %+v, %v", m, err)
+			}
+		})
 	}
 }

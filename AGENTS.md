@@ -12,15 +12,20 @@ do not make separate API credits a prerequisite.
 - `cmd`: Cobra commands, argument validation, user-facing output.
 - `config`: configuration defaults, file loading, and validation.
 - `docker`: container creation, startup, and terminal attachment through the
-  Docker CLI, subprocess errors, and cancellation. Callers own created containers; failed starts preserve them
+  Docker CLI, persistent tmux server/client operations, subprocess errors, and cancellation. Callers own created containers; failed starts preserve them
   and report their IDs. Do not silently remove containers after a failed start.
 - `session`: versioned local JSON metadata, create/save/start coordination, and saved
-  session lookup for attachment.
+  session lookup for attachment. Native run sessions use a foreground tmux server;
+  reconnecting must not launch another agent. Preserve legacy Docker attachment
+  for records without a terminal marker.
   Save metadata before startup; preserve and identify containers if saving fails.
   Metadata deletion never removes containers or worktrees. Future session
-  management will also coordinate Git workspaces, agent adapters, and
-  authentication. Add packages only with working behavior; do not create empty
+  management will also coordinate Git workspaces. Native agent invocation and
+  profile preparation already live in `agent` and `profile`. Add packages only with working behavior; do not create empty
   packages or speculative interfaces.
+- `agent`: native Claude Code and Codex run/login descriptions, independent of Cobra.
+- `profile`: private agent-scoped directories for native client state; credentials
+  are managed by the native clients.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace
   boundary. Agent adapters describe agent-specific execution; authentication
   handles credential lifecycles separately. Neither should depend on Cobra.

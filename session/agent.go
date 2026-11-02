@@ -11,8 +11,8 @@ import (
 	"github.com/hewitt-iso/hewitt/profile"
 )
 
-// AgentOptions describes one native client invocation. Image must contain env and the
-// selected CLI on PATH and support execution as the invoking host user's UID/GID.
+// AgentOptions describes one native client invocation. Run images must contain
+// tmux, env, and the selected CLI on PATH and support execution as the invoking host user's UID/GID.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
 }
@@ -27,11 +27,17 @@ func RunAgent(ctx context.Context, opts AgentOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "run")
+	command := append([]string{create.Entrypoint}, create.Command...)
+	create.Entrypoint = "tmux"
+	create.Command = docker.TerminalServerArgs()
+	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "run", "tmux")
 	if err != nil {
 		return "", err
 	}
 	if err := (docker.Client{}).Start(ctx, metadata.ID); err != nil {
+		return "", err
+	}
+	if err := (docker.Client{}).StartTerminal(ctx, metadata.ID, command); err != nil {
 		return "", err
 	}
 	return metadata.ID, nil
@@ -49,7 +55,7 @@ func Login(ctx context.Context, opts AgentOptions, in io.Reader, out, stderr io.
 	if err != nil {
 		return err
 	}
-	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "login")
+	metadata, err := createAgentContainer(ctx, store, opts.Agent, create, opts.Profile, "login", "")
 	if err != nil {
 		return err
 	}
