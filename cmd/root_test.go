@@ -25,7 +25,7 @@ func TestRootCommand(t *testing.T) {
 		wantErr string
 	}{
 		{name: "no arguments", want: "Usage:"},
-		{name: "help", args: []string{"--help"}, want: "The run command creates and starts a container"},
+		{name: "help", args: []string{"--help"}, want: "Run coding agents in isolated local workspaces"},
 		{name: "short help", args: []string{"-h"}, want: "--config"},
 		{name: "version", args: []string{"--version"}, want: "hewitt v0.1.0-test\n"},
 		{name: "unknown command", args: []string{"unknown"}, wantErr: "unknown command"},

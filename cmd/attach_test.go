@@ -74,7 +74,7 @@ func TestAttachLookupAndHelp(t *testing.T) {
 		}
 	}
 	out, err := executeCommand(t, "attach", "--help", "--config", filepath.Join(home, "missing.json"))
-	if err != nil || !strings.Contains(out, "Ctrl-P") || strings.Contains(out, "not implemented") {
+	if err != nil || !strings.Contains(out, "hewitt attach <full-session-id>") || strings.Contains(out, "not implemented") {
 		t.Fatalf("help = %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hewitt")); !os.IsNotExist(err) {
