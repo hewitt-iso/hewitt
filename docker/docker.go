@@ -144,12 +144,7 @@ func (c Client) StartAttached(ctx context.Context, id string, in io.Reader, out,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "docker", "container", "start", "--attach", "--interactive", "--", id)
-	command.Stdin, command.Stdout, command.Stderr = in, out, stderr
-	if err := command.Run(); err != nil {
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
+	if err := runTerminal(ctx, in, out, stderr, "container", "start", "--attach", "--interactive", "--detach-keys=ctrl-p,ctrl-q", "--", id); err != nil {
 		return fmt.Errorf("attached container %q (container preserved): %w", id, err)
 	}
 	// Inspect instead of waiting: detach must return while the container is alive.
@@ -165,7 +160,7 @@ func (c Client) StartAttached(ctx context.Context, id string, in io.Reader, out,
 		return fmt.Errorf("container %q returned invalid state (container preserved)", id)
 	}
 	if state.Status != "exited" {
-		return fmt.Errorf("detached from container %q (state %s); authentication completion not confirmed; reconnect with docker attach %s", id, state.Status, id)
+		return fmt.Errorf("detached from container %q (state %s); authentication completion not confirmed; reconnect with hewitt attach %s", id, state.Status, id)
 	}
 	if state.ExitCode != 0 {
 		return fmt.Errorf("container %q exited with status %d (container preserved)", id, state.ExitCode)
@@ -192,12 +187,10 @@ func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, st
 	return attach(ctx, id, stdin, stdout, stderr, []string{"container", "attach", "--detach-keys=ctrl-p,ctrl-q", "--sig-proxy=false", "--", id})
 }
 
-func attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer, args []string) (result error) {
-	if err := validateArgument("container ID or name", id); err != nil {
-		return err
-	}
+// runTerminal shares cancellation cleanup between login and session attachment.
+func runTerminal(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) (result error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("attach container %q: %w", id, err)
+		return err
 	}
 	// Docker normally restores terminal settings itself. Keep a snapshot because
 	// CommandContext may kill it before its cleanup runs during cancellation.
@@ -214,14 +207,33 @@ func attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.W
 		}()
 	}
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	var diagnostic bytes.Buffer
+	cmd.Stdin, cmd.Stdout = stdin, stdout
+	cmd.Stderr = io.MultiWriter(stderr, &diagnostic)
 	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		} else if errors.Is(err, exec.ErrNotFound) {
 			err = fmt.Errorf("ensure the Docker CLI is installed: %w", err)
+		} else {
+			// Some Docker CLI versions report their detach escape as exit 1.
+			// Match only that diagnostic; other failures must remain errors.
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.TrimSpace(diagnostic.String()) == "read escape sequence" {
+				return nil
+			}
 		}
+		return err
+	}
+	return nil
+}
+
+func attach(ctx context.Context, id string, in io.Reader, out, stderr io.Writer, args []string) error {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if err := runTerminal(ctx, in, out, stderr, args...); err != nil {
 		return fmt.Errorf("attach container %q: %w", id, err)
 	}
 	return nil

@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS base
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git ripgrep procps \
+    ca-certificates curl git ripgrep procps tmux \
     && rm -rf /var/lib/apt/lists/*
 ENV HOME=/tmp TERM=xterm-256color
 WORKDIR /tmp
