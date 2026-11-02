@@ -9,10 +9,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/profile"
 	"github.com/hewitt-iso/hewitt/workspace"
 )
@@ -22,14 +24,23 @@ import (
 // Credentials and agent input must never be stored here.
 type Metadata struct {
 	Workspace *workspace.Worktree `json:"workspace,omitempty"`
-	Terminal  string              `json:"terminal,omitempty"`
-	Profile   string              `json:"profile,omitempty"`
-	Operation string              `json:"operation,omitempty"`
-	ID        string              `json:"id"`
-	Agent     string              `json:"agent"`
-	Image     string              `json:"image"`
-	Name      string              `json:"name,omitempty"`
-	CreatedAt time.Time           `json:"created_at"`
+	Copy      *workspace.Copy     `json:"copy,omitempty"`
+	Egress    *Egress             `json:"egress,omitempty"`
+	// Mode is empty for sessions created before launch modes existed (new).
+	// Container is the external target of exec and sidecar sessions; exec
+	// sessions use a random ID and their own terminal Socket.
+	Mode      string    `json:"mode,omitempty"`
+	Container string    `json:"container,omitempty"`
+	Socket    string    `json:"socket,omitempty"`
+	Isolation string    `json:"isolation,omitempty"`
+	Terminal  string    `json:"terminal,omitempty"`
+	Profile   string    `json:"profile,omitempty"`
+	Operation string    `json:"operation,omitempty"`
+	ID        string    `json:"id"`
+	Agent     string    `json:"agent"`
+	Image     string    `json:"image"`
+	Name      string    `json:"name,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type record struct {
@@ -229,6 +240,26 @@ func (m Metadata) validate() error {
 			return err
 		}
 	}
+	if m.Copy != nil {
+		if err := m.Copy.Validate(); err != nil {
+			return err
+		}
+	}
+	if e := m.Egress; e != nil && (!strings.HasPrefix(e.Network, "hewitt-egress-") || validateID(e.Proxy) != nil || !filepath.IsAbs(e.ConfigDir)) {
+		return fmt.Errorf("invalid session egress record")
+	}
+	if m.Mode != "" && !slices.Contains(config.Modes, m.Mode) {
+		return fmt.Errorf("unsupported session mode %q", m.Mode)
+	}
+	if m.Isolation != "" && !slices.Contains(config.Isolations, m.Isolation) {
+		return fmt.Errorf("unsupported session isolation %q", m.Isolation)
+	}
+	if (m.Mode == "exec" || m.Mode == "sidecar") == (m.Container == "") {
+		return fmt.Errorf("exec and sidecar sessions, and only they, record a target container")
+	}
+	if m.Mode == "exec" && (m.Terminal != "tmux" || !strings.HasPrefix(m.Socket, "/tmp/hewitt-")) {
+		return fmt.Errorf("exec sessions require a tmux terminal socket")
+	}
 	if m.Terminal != "" && m.Terminal != "tmux" {
 		return fmt.Errorf("unsupported session terminal %q", m.Terminal)
 	}
@@ -247,14 +278,14 @@ func (m Metadata) validate() error {
 	if err := validateAgent(m.Agent); err != nil {
 		return err
 	}
-	if m.Image == "" {
+	if m.Image == "" && m.Mode != "exec" {
 		return fmt.Errorf("session image must not be empty")
 	}
-	for _, value := range []string{m.Image, m.Name} {
+	for _, value := range []string{m.Image, m.Name, m.Container, m.Socket} {
 		if strings.HasPrefix(value, "-") || strings.ContainsFunc(value, func(r rune) bool {
 			return unicode.IsSpace(r) || unicode.IsControl(r)
 		}) {
-			return fmt.Errorf("session image and name must contain no whitespace or control characters and must not start with '-'")
+			return fmt.Errorf("session image, name, container, and socket must contain no whitespace or control characters and must not start with '-'")
 		}
 	}
 	if m.CreatedAt.IsZero() {

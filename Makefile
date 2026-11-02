@@ -28,11 +28,14 @@ check: fmt-check vet test
 tidy:
 	$(GO) mod tidy
 
-.PHONY: images image-claude image-codex
-images: image-claude image-codex
+.PHONY: images image-claude image-codex image-egress
+images: image-claude image-codex image-egress
 
 image-claude:
 	docker build --target claude -t hewitt/claude:local images
 
 image-codex:
 	docker build --target codex -t hewitt/codex:local images
+
+image-egress:
+	docker build --target egress -t hewitt/egress:local images

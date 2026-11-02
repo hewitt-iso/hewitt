@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,18 @@ esac
 	for _, client := range []string{"claude", "codex"} {
 		opts := AgentOptions{Agent: client, Image: "agent:test", Profile: "personal", DataDir: data}
 		var out, stderr bytes.Buffer
-		if err := Login(context.Background(), opts, strings.NewReader(""), &out, &stderr); err != nil {
+		// A file is passed to Docker directly, so the token remains to be read
+		// after the attached login; a terminal behaves the same way.
+		input := filepath.Join(t.TempDir(), "input")
+		if err := os.WriteFile(input, []byte("synthetic-token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		in, err := os.Open(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer in.Close()
+		if err := Login(context.Background(), opts, in, &out, &stderr); err != nil {
 			t.Fatal(err)
 		}
 		store, err := NewStore(data)
@@ -51,7 +63,7 @@ esac
 		if err := os.WriteFile(state, []byte("native"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if id, err := RunAgent(context.Background(), opts); err != nil || id != adapterTestID {
+		if id, err := RunAgent(context.Background(), opts, io.Discard); err != nil || id != adapterTestID {
 			t.Fatalf("run %q %v", id, err)
 		}
 		metadata, err = store.Get(adapterTestID)
@@ -92,7 +104,7 @@ func TestPreparationRejectsInvalidInputBeforeCreatingProfile(t *testing.T) {
 		{Agent: "claude", Image: "test", Profile: "../escape"},
 	} {
 		opts.DataDir = filepath.Join(t.TempDir(), "absent")
-		if _, err := RunAgent(context.Background(), opts); err == nil {
+		if _, err := RunAgent(context.Background(), opts, io.Discard); err == nil {
 			t.Fatal("accepted invalid input")
 		}
 		if _, err := os.Stat(opts.DataDir); !os.IsNotExist(err) {
@@ -101,7 +113,7 @@ func TestPreparationRejectsInvalidInputBeforeCreatingProfile(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := RunAgent(ctx, AgentOptions{}); !errors.Is(err, context.Canceled) {
+	if _, err := RunAgent(ctx, AgentOptions{}, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }

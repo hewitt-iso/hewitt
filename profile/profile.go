@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode"
 )
 
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -66,6 +68,58 @@ func privateDir(path string) error {
 	}
 	if info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("profile directory %q must not be accessible to group or other users", path)
+	}
+	return nil
+}
+
+const tokenFile = "token.env"
+
+// SaveToken stores a long-lived token that the user copied from the native
+// client's official login output, as a private Docker env file in the profile.
+// The value is validated but never logged; the write is atomic.
+func SaveToken(dir, variable, token string) error {
+	if token == "" || strings.ContainsFunc(token, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("token must be nonempty and contain no whitespace or control characters")
+	}
+	tmp, err := os.CreateTemp(dir, ".token-*")
+	if err != nil {
+		return fmt.Errorf("create token file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(variable + "=" + token + "\n"); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write token file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write token file: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, tokenFile)); err != nil {
+		return fmt.Errorf("save token file: %w", err)
+	}
+	return nil
+}
+
+// TokenFile returns the profile's token env file, or "" when none was saved.
+// Symlinks and files readable by group or other users are refused.
+func TokenFile(dir string) (string, error) {
+	path := filepath.Join(dir, tokenFile)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect token file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("token file %q must be a private regular file", path)
+	}
+	return path, nil
+}
+
+// RemoveToken deletes a saved token; a missing token is not an error.
+func RemoveToken(dir string) error {
+	if err := os.Remove(filepath.Join(dir, tokenFile)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove token file: %w", err)
 	}
 	return nil
 }

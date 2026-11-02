@@ -8,8 +8,8 @@ import (
 
 func newAttachCommand(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "attach <session>",
-		Short: "Attach to a session's container terminal",
+		Use:     "attach <session>",
+		Short:   "Attach to a session's container terminal",
 		Example: "  hewitt attach <full-session-id>",
 		Args:    sessionArg,
 		RunE: func(cmd *cobra.Command, args []string) error {

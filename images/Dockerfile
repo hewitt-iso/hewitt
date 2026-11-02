@@ -26,3 +26,11 @@ RUN npm install --global "@openai/codex@${CODEX_VERSION}" \
     && codex --version
 USER 1000:1000
 CMD ["codex"]
+
+# Egress proxy for restricted sessions. Hewitt mounts its configuration and
+# host allowlist; the proxy runs as the invoking user on an unprivileged port.
+FROM base AS egress
+RUN apt-get update && apt-get install -y --no-install-recommends tinyproxy \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000
+CMD ["tinyproxy", "-d", "-c", "/hewitt/egress/tinyproxy.conf"]

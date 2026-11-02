@@ -178,10 +178,10 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		args []string
 		want string
 	}{
-		{args: []string{"run"}, want: "accepts 1 arg(s)"},
-		{args: []string{"run", "codex", "extra"}, want: "accepts 1 arg(s)"},
-		{args: []string{"run", "codex"}, want: `required flag(s) "image"`},
-		{args: []string{"run", "codex", "--image", ""}, want: "image must be nonempty"},
+		{args: []string{"run"}, want: "select an agent"},
+		{args: []string{"run", "codex", "extra"}, want: "accepts at most 1 arg(s)"},
+		{args: []string{"run", "codex"}, want: "select an image"},
+		{args: []string{"run", "codex", "--image", ""}, want: "select an image"},
 		{args: []string{"run", "codex", "--image=--privileged"}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--name", "bad name"}, want: "container name must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--profile", "../escape"}, want: "profile must"},

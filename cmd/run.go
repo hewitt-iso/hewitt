@@ -10,6 +10,8 @@ import (
 
 func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	var image, name, profile, repository, base string
+	var file, mode, target, workspace, isolation string
+	var danger []string
 	var detach bool
 	short := "Start an agent container with a persistent native profile"
 	exampleAction := action
@@ -30,11 +32,22 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := session.AgentOptions{Agent: args[0], Image: image, Name: name, Profile: profile, DataDir: cfg.DataDir, Repository: repository, Base: base}
+			opts := session.AgentOptions{Image: image, Name: name, Profile: profile, DataDir: cfg.DataDir, Repository: repository}
+			if len(args) > 0 {
+				opts.Agent = args[0]
+			}
 			if action != "run" {
 				return session.Authenticate(cmd.Context(), opts, action, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			}
-			id, err := session.RunAgent(cmd.Context(), opts)
+			// Unset flags leave their values to the Hewittfile and its defaults.
+			if !cmd.Flags().Changed("profile") {
+				opts.Profile = ""
+			}
+			if cmd.Flags().Changed("base") {
+				opts.Base = base
+			}
+			opts.File, opts.Mode, opts.Target, opts.Workspace, opts.Isolation, opts.Danger = file, mode, target, workspace, isolation, danger
+			id, err := session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -52,16 +65,31 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			return session.Attach(cmd.Context(), store, id, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
-	if action == "run" {
-		cmd.Flags().StringVar(&repository, "repo", ".", "Git repository for the session (default: current directory)")
-		cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the new worktree from")
-		cmd.Flags().BoolVarP(&detach, "detach", "d", false, "start without attaching; print the session ID")
-	}
-	cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (required)")
 	cmd.Flags().StringVar(&name, "name", "", "optional Docker container name")
 	cmd.Flags().StringVar(&profile, "profile", "default", "persistent profile ID, scoped to the agent")
-	if err := cmd.MarkFlagRequired("image"); err != nil {
-		panic(err)
+	if action != "run" {
+		cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (required)")
+		if err := cmd.MarkFlagRequired("image"); err != nil {
+			panic(err)
+		}
+		return cmd
 	}
+	cmd.Args = cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs)
+	cmd.Use = "run [agent]"
+	cmd.Example = "  hewitt run codex --image hewitt/codex:local --profile personal\n" +
+		"  hewitt run                       # settings from ./Hewittfile\n" +
+		"  hewitt run claude --mode exec --target py-agent\n" +
+		"  hewitt run claude --isolation restricted --workspace copy"
+	cmd.Long = short + ".\n\nFlags override the Hewittfile (Hewittfile in --repo, or --file); see README for its instructions.\nSupported adapters: claude, codex. Planned agents: opencode, gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
+	cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (or FROM)")
+	cmd.Flags().StringVar(&repository, "repo", ".", "source directory or Git repository (default: current directory)")
+	cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the new worktree from")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "start without attaching; print the session ID")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "Hewittfile path (default: Hewittfile in --repo)")
+	cmd.Flags().StringVar(&mode, "mode", "", "launch mode: new, exec, or sidecar (default new)")
+	cmd.Flags().StringVar(&target, "target", "", "existing container for exec and sidecar modes")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "workspace: worktree, direct, or copy (default worktree)")
+	cmd.Flags().StringVar(&isolation, "isolation", "", "isolation level: shared, isolated, restricted, or hardened")
+	cmd.Flags().StringSliceVar(&danger, "danger", nil, "explicitly allow weakening: network, host-paths, writable-root, symlinks")
 	return cmd
 }

@@ -40,7 +40,7 @@ printf '%s\n' "$@"
 			if err != nil {
 				t.Fatalf("native command: %v, %s", err, out)
 			}
-			want := "auth\nlogin\n--claudeai\n"
+			want := "setup-token\n"
 			if name == "codex" {
 				want = "-c\ncli_auth_credentials_store=\"file\"\n-c\nforced_login_method=\"chatgpt\"\nlogin\n--device-auth\n"
 			}

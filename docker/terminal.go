@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,51 @@ func TerminalServerArgs() []string {
 func terminalExec(id string, command ...string) []string {
 	args := []string{"container", "exec", "--", id, "tmux", "-N", "-S", terminalSocket}
 	return append(args, command...)
+}
+
+// StartExternalTerminal launches the agent once in a container Hewitt does not
+// own. The tmux server uses a session-unique socket and runs beside the
+// container's own processes; the container is never started, stopped, or removed.
+func (c Client) StartExternalTerminal(ctx context.Context, id, socket, workdir string, command []string) error {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return err
+	}
+	if err := validateSocket(socket); err != nil {
+		return err
+	}
+	if len(command) < 2 {
+		return fmt.Errorf("terminal command requires an executable and arguments")
+	}
+	for _, arg := range command {
+		if arg == ";" || strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("terminal command contains a tmux separator or NUL")
+		}
+	}
+	args := []string{"container", "exec"}
+	if workdir != "" {
+		if !strings.HasPrefix(workdir, "/") || strings.ContainsAny(workdir, "\x00\r\n") {
+			return fmt.Errorf("container workdir must be an absolute path")
+		}
+		args = append(args, "--workdir", workdir)
+	}
+	// One tmux command list sets remain-on-exit before an exiting agent can
+	// destroy its pane. The server daemonizes inside the external container.
+	args = append(args, "--", id, "tmux", "-f", "/dev/null", "-S", socket, "new-session", "-d", "-s", "hewitt", "--")
+	args = append(args, command...)
+	args = append(args, ";", "set-option", "-t", "=hewitt", "remain-on-exit", "on")
+	if _, err := c.execute(ctx, args...); err != nil {
+		return fmt.Errorf("launch agent in external container %q (container untouched; it must contain tmux): %w", id, err)
+	}
+	return nil
+}
+
+func validateSocket(socket string) error {
+	if !strings.HasPrefix(socket, "/tmp/hewitt-") || strings.ContainsFunc(socket[len("/tmp/hewitt-"):], func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.')
+	}) {
+		return fmt.Errorf("invalid terminal socket %q", socket)
+	}
+	return nil
 }
 
 // StartTerminal launches the agent once, after the foreground server is ready.
@@ -57,8 +103,17 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 
 // AttachTerminal reconnects a client to the existing tmux session. Ctrl-B, D
 // detaches only this client, leaving both server and agent running.
-func (Client) AttachTerminal(ctx context.Context, id string, in io.Reader, out, stderr io.Writer) error {
+func (c Client) AttachTerminal(ctx context.Context, id string, in io.Reader, out, stderr io.Writer) error {
+	return c.AttachTerminalSocket(ctx, id, terminalSocket, in, out, stderr)
+}
+
+// AttachTerminalSocket reconnects to a terminal started with a specific socket,
+// such as one in an external container.
+func (Client) AttachTerminalSocket(ctx context.Context, id, socket string, in io.Reader, out, stderr io.Writer) error {
+	if err := validateSocket(socket); err != nil {
+		return err
+	}
 	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--", id,
-		"tmux", "-N", "-S", terminalSocket, "attach-session", "-t", "=hewitt"}
+		"tmux", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
 	return attach(ctx, id, in, out, stderr, args)
 }
