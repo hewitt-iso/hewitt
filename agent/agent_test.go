@@ -55,7 +55,7 @@ printf '%s\n' "$@"
 }
 
 func TestUnsupportedAdapter(t *testing.T) {
-	for _, name := range []string{"opencode", "gemini", "copilot", "../claude", ""} {
+	for _, name := range []string{"gemini", "copilot", "../claude", ""} {
 		if _, err := Lookup(name); err == nil {
 			t.Fatalf("accepted unsupported adapter %q", name)
 		}

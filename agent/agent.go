@@ -59,8 +59,10 @@ func Lookup(name string) (Adapter, error) {
 		return Claude{}, nil
 	case "codex":
 		return Codex{}, nil
+	case "opencode":
+		return OpenCode{}, nil
 	default:
-		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: claude, codex)", name)
+		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: claude, codex, opencode)", name)
 	}
 }
 
@@ -120,6 +122,41 @@ func codexInvocation(args ...string) Invocation {
 	return invocation("codex", command, []string{"CODEX_HOME=" + ProfilePath + "/codex"}, []string{
 		"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL",
 		"OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_PROVIDER",
+	})
+}
+
+// OpenCode uses its native provider login (opencode auth login): for example
+// GitHub Copilot device login or ChatGPT Plus/Pro, or provider API keys from an
+// env file. Its credentials live in XDG_DATA_HOME/opencode/auth.json, which is
+// inside the profile.
+type OpenCode struct{}
+
+func (OpenCode) Name() string       { return "opencode" }
+func (OpenCode) Run() Invocation    { return openCodeInvocation() }
+func (OpenCode) Login() Invocation  { return openCodeInvocation("auth", "login") }
+func (OpenCode) Status() Invocation { return openCodeInvocation("auth", "list") }
+func (OpenCode) Logout() Invocation { return openCodeInvocation("auth", "logout") }
+func (OpenCode) ConfigDir() string  { return ProfilePath + "/config/opencode" }
+func (OpenCode) InstructionFile() string {
+	return ProfilePath + "/config/opencode/AGENTS.md"
+}
+func (OpenCode) TokenVariable() string { return "" }
+func (OpenCode) Hosts() []string {
+	return []string{
+		"opencode.ai", "models.dev",
+		"github.com", "api.github.com", "*.githubcopilot.com",
+		"api.openai.com", "chatgpt.com", "auth.openai.com",
+	}
+}
+
+func openCodeInvocation(args ...string) Invocation {
+	// Provider keys baked into images are removed; keys from an env file are
+	// kept by Invocation.Allow. Disabling default plugins would hide the
+	// built-in subscription logins, so that override is removed too.
+	return invocation("opencode", args, []string{"OPENCODE_DISABLE_AUTOUPDATE=1"}, []string{
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+		"OPENROUTER_API_KEY", "XAI_API_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
+		"OPENCODE_DISABLE_DEFAULT_PLUGINS", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT",
 	})
 }
 

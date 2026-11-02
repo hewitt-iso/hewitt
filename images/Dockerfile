@@ -27,6 +27,15 @@ RUN npm install --global "@openai/codex@${CODEX_VERSION}" \
 USER 1000:1000
 CMD ["codex"]
 
+FROM base AS opencode
+ARG OPENCODE_VERSION=1.15.7
+RUN npm install --global "opencode-ai@${OPENCODE_VERSION}" \
+    && npm cache clean --force \
+    && opencode --version
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
+USER 1000:1000
+CMD ["opencode"]
+
 # Egress proxy for restricted sessions. Hewitt mounts its configuration and
 # host allowlist; the proxy runs as the invoking user on an unprivileged port.
 FROM base AS egress
