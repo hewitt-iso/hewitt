@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hewitt-iso/hewitt/docker"
+	"github.com/hewitt-iso/hewitt/workspace"
 )
 
 // Run creates a container, saves its metadata, and requests startup. Once created,
@@ -22,7 +23,7 @@ func Run(ctx context.Context, store *Store, agent string, opts docker.CreateOpti
 	return m, nil
 }
 
-func createAgentContainer(ctx context.Context, store *Store, agent string, opts docker.CreateOptions, profileID, operation, terminal string) (Metadata, error) {
+func createAgentContainer(ctx context.Context, store *Store, agent string, opts docker.CreateOptions, profileID, operation, terminal string, worktrees ...*workspace.Worktree) (Metadata, error) {
 	if err := validateAgent(agent); err != nil {
 		return Metadata{}, err
 	}
@@ -32,6 +33,9 @@ func createAgentContainer(ctx context.Context, store *Store, agent string, opts 
 		return Metadata{}, err
 	}
 	m := Metadata{ID: id, Agent: agent, Image: opts.Image, Name: opts.Name, CreatedAt: time.Now().UTC(), Profile: profileID, Operation: operation, Terminal: terminal}
+	if len(worktrees) > 0 {
+		m.Workspace = worktrees[0]
+	}
 	if err := store.Save(m); err != nil {
 		return m, fmt.Errorf("record container %q (container preserved, startup not attempted): %w", id, err)
 	}

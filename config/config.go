@@ -11,7 +11,7 @@ import (
 
 // Config contains preferences, not credentials. Loading it creates no directories.
 type Config struct {
-	// DataDir holds session metadata and reserves space for future worktrees.
+	// DataDir holds session metadata, native profiles, and Git worktrees.
 	DataDir string `json:"data_dir"`
 }
 
