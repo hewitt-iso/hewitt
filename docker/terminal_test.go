@@ -20,6 +20,7 @@ func TestStartTerminalArguments(t *testing.T) {
 	want := append(terminalExec(testID, "show-options", "-s"), terminalExec(testID, terminalKeys...)...)
 	want = append(want, terminalExec(testID, "new-session", "-d", "-s", "hewitt", "--")...)
 	want = append(want, command...)
+	want = append(want, ";", "set-option", "-s", "exit-empty", "on")
 	if got := readArgs(t, log); !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
 	}

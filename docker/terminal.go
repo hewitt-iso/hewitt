@@ -114,6 +114,11 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 	if len(command) < 2 {
 		return fmt.Errorf("terminal command requires an executable and arguments")
 	}
+	for _, arg := range command {
+		if arg == ";" || strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("terminal command contains a tmux separator or NUL")
+		}
+	}
 	ready, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	for {
@@ -130,8 +135,12 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 	if _, err := c.execute(ctx, terminalExec(id, terminalKeys...)...); err != nil {
 		return fmt.Errorf("configure terminal in container %q (container preserved): %w", id, err)
 	}
+	// A server started without sessions keeps exit-empty off. Turning it on in
+	// the same command list as new-session lets the server, and therefore the
+	// container, exit with the agent.
 	args := terminalExec(id, "new-session", "-d", "-s", "hewitt", "--")
 	args = append(args, command...)
+	args = append(args, ";", "set-option", "-s", "exit-empty", "on")
 	if _, err := c.execute(ctx, args...); err != nil {
 		return fmt.Errorf("launch agent in container %q (container preserved): %w", id, err)
 	}
