@@ -21,8 +21,31 @@ func IsOnboarded(dataDir string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// ShouldSyncConfigs reports whether host configs were opted into during
+// onboarding and should be refreshed before starting a session.
+func ShouldSyncConfigs(dataDir string) bool {
+	if !filepath.IsAbs(dataDir) {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(dataDir, onboardedFile))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == "1"
+}
+
 // MarkOnboarded records that initial onboarding has completed for dataDir.
 func MarkOnboarded(dataDir string) error {
+	return markOnboardedWithValue(dataDir, "1\n")
+}
+
+// MarkOnboardedNoSync records that initial onboarding completed with a clean
+// profile (host config sync disabled).
+func MarkOnboardedNoSync(dataDir string) error {
+	return markOnboardedWithValue(dataDir, "no-sync\n")
+}
+
+func markOnboardedWithValue(dataDir, val string) error {
 	if !filepath.IsAbs(dataDir) {
 		return fmt.Errorf("profile data directory must be absolute")
 	}
@@ -34,7 +57,7 @@ func MarkOnboarded(dataDir string) error {
 		return fmt.Errorf("resolve data directory: %w", err)
 	}
 	marker := filepath.Join(root, onboardedFile)
-	if err := os.WriteFile(marker, []byte("1\n"), 0o600); err != nil {
+	if err := os.WriteFile(marker, []byte(val), 0o600); err != nil {
 		return fmt.Errorf("write onboarding marker: %w", err)
 	}
 	return nil
@@ -69,6 +92,9 @@ func DetectHostConfigs(homeDir string) []string {
 	if hasAnyTarget(homeDir,
 		".config/opencode/opencode.json",
 		".config/opencode/opencode.jsonc",
+		".config/opencode/tui.json",
+		".config/opencode/tui.jsonc",
+		".config/opencode/themes",
 		".config/opencode/AGENTS.md",
 		".config/opencode/skill",
 		".config/opencode/skills",
@@ -130,9 +156,9 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 		imported = append(imported, "claude")
 	}
 
-	// 2. Codex configs (rules, sanitized config.toml, skills).
+	// 2. Codex configs (rules, sanitized config.toml, skills, UI state).
 	codexImported := false
-	for _, rel := range []string{"AGENTS.md", "instructions.md", "skills", "rules"} {
+	for _, rel := range []string{"AGENTS.md", "instructions.md", "skills", "rules", ".codex-global-state.json"} {
 		src := filepath.Join(homeDir, ".codex", rel)
 		dst := filepath.Join(dirs["codex"], "codex", rel)
 		copied, err := copySafe(src, dst, true)
@@ -154,7 +180,7 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 
 	// 3. OpenCode configs (opencode.json, rules, skills, commands, agents).
 	opencodeImported := false
-	for _, rel := range []string{"opencode.json", "opencode.jsonc", "AGENTS.md", "skill", "skills", "command", "agent"} {
+	for _, rel := range []string{"opencode.json", "opencode.jsonc", "tui.json", "tui.jsonc", "themes", "AGENTS.md", "skill", "skills", "command", "commands", "agent", "agents"} {
 		src := filepath.Join(homeDir, ".config", "opencode", rel)
 		dst := filepath.Join(dirs["opencode"], "config", "opencode", rel)
 		copied, err := copySafe(src, dst, true)
@@ -214,6 +240,8 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 			gitImported = true
 		}
 		_, _ = copySafe(filepath.Join(homeDir, ".bashrc"), filepath.Join(dirs[client], "home", ".bashrc"), true)
+		_, _ = copySafe(filepath.Join(homeDir, ".bashrc.d"), filepath.Join(dirs[client], "home", ".bashrc.d"), true)
+		_, _ = copySafe(filepath.Join(homeDir, ".bash_aliases"), filepath.Join(dirs[client], "home", ".bash_aliases"), true)
 	}
 	if gitImported {
 		imported = append(imported, "git")

@@ -53,6 +53,7 @@ func TestStartTerminalCancellation(t *testing.T) {
 }
 
 func TestAttachTerminalReconnects(t *testing.T) {
+	t.Setenv("TERM", "")
 	log := fakeTerminalDocker(t, "printf 'existing screen'")
 	var out bytes.Buffer
 	for range 2 {
@@ -74,4 +75,39 @@ func fakeTerminalDocker(t *testing.T, body string) string {
 	log := fakeDocker(t, `printf '%s\0' "$@" >> "$HEWITT_TERMINAL_CALLS"`+"\n"+body) + ".calls"
 	t.Setenv("HEWITT_TERMINAL_CALLS", log)
 	return log
+}
+
+func TestAttachTerminalPreservesHostType(t *testing.T) {
+	for _, terminal := range []string{"xterm-kitty", "tmux-256color", "screen-256color", "dumb", ""} {
+		t.Run(terminal, func(t *testing.T) {
+			t.Setenv("TERM", terminal)
+			log := fakeTerminalDocker(t, "exit 0")
+			if err := (Client{}).AttachTerminal(context.Background(), testID, nil, io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			want := terminal
+			if want == "" || want == "dumb" {
+				want = "xterm-256color"
+			}
+			args := readArgs(t, log)
+			if args[5] != "TERM="+want {
+				t.Fatalf("terminal environment = %q", args)
+			}
+		})
+	}
+}
+
+func TestExternalTerminalConfiguredBeforeLaunch(t *testing.T) {
+	log := fakeTerminalDocker(t, "exit 0")
+	if err := (Client{}).StartExternalTerminal(context.Background(), testID, "/tmp/hewitt-test.sock", "/workspace", []string{"env", "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(readArgs(t, log), " ")
+	config, launch := strings.Index(args, "default-terminal tmux-256color"), strings.Index(args, "new-session")
+	if config < 0 || launch < config {
+		t.Fatalf("agent started before terminal configuration: %s", args)
+	}
+	if strings.Contains(args, "bind-key -n C-c") || strings.Contains(args, "bind-key -n C-d") {
+		t.Fatalf("native CLI keys intercepted: %s", args)
+	}
 }

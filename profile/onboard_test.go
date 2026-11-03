@@ -163,3 +163,30 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestImportOpenCodeTUIOnly(t *testing.T) {
+	for _, name := range []string{"tui.json", "tui.jsonc", "themes/custom.json"} {
+		t.Run(name, func(t *testing.T) {
+			home, data := t.TempDir(), t.TempDir()
+			src := filepath.Join(home, ".config", "opencode", name)
+			if err := os.MkdirAll(filepath.Dir(src), 0700); err != nil {
+				t.Fatal(err)
+			}
+			content := []byte(`{"theme":"custom","keybinds":{"leader":"ctrl+a"}}`)
+			if err := os.WriteFile(src, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if got := DetectHostConfigs(home); !reflect.DeepEqual(got, []string{"opencode"}) {
+				t.Fatalf("detected = %v", got)
+			}
+			if _, err := ImportHostConfigs(data, home, "personal"); err != nil {
+				t.Fatal(err)
+			}
+			dst := filepath.Join(data, "profiles", "opencode", "personal", "config", "opencode", name)
+			got, err := os.ReadFile(dst)
+			if err != nil || string(got) != string(content) {
+				t.Fatalf("import = %q, %v", got, err)
+			}
+		})
+	}
+}

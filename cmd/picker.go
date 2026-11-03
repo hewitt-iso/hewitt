@@ -100,11 +100,11 @@ const (
 func styleStatus(status string) string {
 	switch status {
 	case "running":
-		return ansiGreen + "● " + status + ansiReset
+		return ansiGreen + status + ansiReset
 	case "stopped":
-		return ansiDim + "○ " + status + ansiReset
+		return ansiDim + status + ansiReset
 	default:
-		return ansiYellow + "◌ " + status + ansiReset
+		return ansiYellow + status + ansiReset
 	}
 }
 
@@ -115,7 +115,7 @@ func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, 
 		if name == "" {
 			name = "-"
 		}
-		options[i] = fmt.Sprintf("%s  %-8s  %-16s  %s  %s%s%s",
+		options[i] = fmt.Sprintf("%s  %-8s  %-16s  %s  %s(%s)%s",
 			shortID(c.meta.ID), c.meta.Agent, name, styleStatus(c.status), ansiDim, c.meta.CreatedAt.UTC().Format(time.RFC3339), ansiReset)
 	}
 	idx, err := pickOption(in, stderr, prompt, options, "session selection cancelled", "write session picker")
@@ -136,29 +136,26 @@ func pickOption(in io.Reader, stderr io.Writer, prompt string, options []string,
 	}
 
 	selected := 0
-	totalLines := len(options) + 2
+	totalLines := len(options) + 1
 	render := func(redraw bool) error {
 		if redraw {
 			if _, err := fmt.Fprintf(stderr, "\x1b[%dA\r\x1b[J", totalLines); err != nil {
 				return err
 			}
 		}
-		if _, err := fmt.Fprintf(stderr, "%s◆%s %s%s%s\r\n", ansiBoldCyan, ansiReset, ansiBold, prompt, ansiReset); err != nil {
+		if _, err := fmt.Fprintf(stderr, "%s %s(↑/↓ or 1-%d, enter to select, q to cancel)%s\r\n", prompt, ansiDim, len(options), ansiReset); err != nil {
 			return err
 		}
 		for i, opt := range options {
 			if i == selected {
-				if _, err := fmt.Fprintf(stderr, "  %s❯ %d.%s %s%s%s\r\n", ansiBoldCyan, i+1, ansiReset, ansiBold, opt, ansiReset); err != nil {
+				if _, err := fmt.Fprintf(stderr, "  %s> %d) %s%s\r\n", ansiBoldCyan, i+1, opt, ansiReset); err != nil {
 					return err
 				}
 			} else {
-				if _, err := fmt.Fprintf(stderr, "    %s%d. %s%s\r\n", ansiDim, i+1, opt, ansiReset); err != nil {
+				if _, err := fmt.Fprintf(stderr, "    %s%d) %s%s\r\n", ansiDim, i+1, opt, ansiReset); err != nil {
 					return err
 				}
 			}
-		}
-		if _, err := fmt.Fprintf(stderr, "  %s↑/↓ or j/k to navigate • 1-%d or enter to confirm • q to cancel%s\r\n", ansiDim, len(options), ansiReset); err != nil {
-			return err
 		}
 		return nil
 	}
@@ -167,8 +164,8 @@ func pickOption(in io.Reader, stderr io.Writer, prompt string, options []string,
 		if _, err := fmt.Fprintf(stderr, "\x1b[%dA\r\x1b[J", totalLines); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(stderr, "%s✔%s %s%s%s %s·%s %s\r\n",
-			ansiBoldGreen, ansiReset, ansiBold, prompt, ansiReset, ansiDim, ansiReset, options[selected])
+		_, err := fmt.Fprintf(stderr, "%s %s> %s%s\r\n",
+			prompt, ansiBoldCyan, options[selected], ansiReset)
 		return err
 	}
 
