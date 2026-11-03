@@ -137,7 +137,7 @@ func codexInvocation(args ...string) Invocation {
 // inside the profile.
 type OpenCode struct{}
 
-func (OpenCode) DefaultImage() string { return "" }
+func (OpenCode) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-opencode:latest" }
 
 func (OpenCode) Name() string       { return "opencode" }
 func (OpenCode) Run() Invocation    { return openCodeInvocation() }

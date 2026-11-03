@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [codex, claude]
+        agent: [codex, claude, opencode]
     steps:
       - uses: actions/checkout@v7
         with:
