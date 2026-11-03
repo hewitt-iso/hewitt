@@ -72,11 +72,11 @@ func TestPersistentTerminal(t *testing.T) {
 	if err := client.Start(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.StartTerminal(ctx, id, []string{"env", "sh", "-c", "printf 'persistent-screen\\n'; sleep 1"}); err != nil {
+	if err := client.StartTerminal(ctx, id, []string{"env", "sh", "-c", "printf 'persistent-screen\\n'; sleep 3"}); err != nil {
 		t.Fatal(err)
 	}
 	// Control clients need no host terminal. Each attach/detach must leave the
-	// original pane alive, and must not create another session or launch an agent.
+	// original pane running, and must not create another session or launch an agent.
 	for range 2 {
 		args := []string{"container", "exec", "--interactive", "--", id, "tmux", "-C", "-N", "-S", terminalSocket, "attach-session", "-t", "=hewitt"}
 		command := exec.CommandContext(ctx, "docker", args...)
@@ -85,12 +85,14 @@ func TestPersistentTerminal(t *testing.T) {
 			t.Fatalf("reconnect: %v: %s", err, out)
 		}
 	}
+	// An exiting agent ends the session, so the foreground server exits and the
+	// container stops instead of keeping a dead pane.
 	for {
-		dead, err := client.execute(ctx, terminalExec(id, "display-message", "-p", "-t", "hewitt:0.0", "#{pane_dead}")...)
+		state, err := client.execute(ctx, "container", "inspect", "--format", "{{.State.Running}}", "--", id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.TrimSpace(dead) == "1" {
+		if strings.TrimSpace(state) == "false" {
 			break
 		}
 		select {
@@ -98,13 +100,5 @@ func TestPersistentTerminal(t *testing.T) {
 			t.Fatal(ctx.Err())
 		case <-time.After(50 * time.Millisecond):
 		}
-	}
-	screen, err := client.execute(ctx, terminalExec(id, "capture-pane", "-p", "-S", "-", "-t", "hewitt:0.0")...)
-	if err != nil || !strings.Contains(screen, "persistent-screen") {
-		t.Fatalf("retained screen = %q, %v", screen, err)
-	}
-	state, err := client.execute(ctx, "container", "inspect", "--format", "{{.State.Running}}", "--", id)
-	if err != nil || strings.TrimSpace(state) != "true" {
-		t.Fatalf("server lifetime = %q, %v", state, err)
 	}
 }

@@ -17,9 +17,10 @@ func TestStartTerminalArguments(t *testing.T) {
 	if err := (Client{}).StartTerminal(context.Background(), testID, command); err != nil {
 		t.Fatal(err)
 	}
-	want := append(terminalExec(testID, "show-options", "-s"), terminalExec(testID, "set-option", "-g", "remain-on-exit", "on")...)
+	want := append(terminalExec(testID, "show-options", "-s"), terminalExec(testID, terminalKeys...)...)
 	want = append(want, terminalExec(testID, "new-session", "-d", "-s", "hewitt", "--")...)
 	want = append(want, command...)
+	want = append(want, ";", "set-option", "-s", "exit-empty", "on")
 	if got := readArgs(t, log); !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
 	}
