@@ -150,7 +150,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if adapter != nil {
 			hosts = append(hosts, adapter.Hosts()...)
 		} else {
-			for _, name := range []string{"claude", "codex", "opencode"} {
+			for _, name := range agent.Names {
 				if a, err := agent.Lookup(name); err == nil {
 					hosts = append(hosts, a.Hosts()...)
 				}
@@ -319,7 +319,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 			return docker.CreateOptions{}, "", err
 		}
 		create.Mounts = []docker.BindMount{{Source: tools, Target: "/hewitt/tools"}}
-		for _, client := range []string{"claude", "codex", "opencode"} {
+		for _, client := range agent.Names {
 			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
 			if err != nil {
 				return docker.CreateOptions{}, "", err
@@ -370,7 +370,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 		{Source: tools, Target: "/hewitt/tools"},
 	}
 	if operation == "run" {
-		for _, client := range []string{"claude", "codex", "opencode"} {
+		for _, client := range agent.Names {
 			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
 			if err != nil {
 				return docker.CreateOptions{}, "", err
