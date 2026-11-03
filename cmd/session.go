@@ -25,25 +25,35 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 		{
 			Use:     "stop <session>",
 			Short:   "Stop a session's agent, keeping its container and workspace",
-			Example: "  hewitt stop <full-session-id>",
+			Example: "  hewitt stop <session>",
 			Args:    sessionArg,
-			RunE: withStore(func(ctx context.Context, store *session.Store, id string, _ io.Writer) error {
-				return session.Stop(ctx, store, id)
+			RunE: withStore(func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
+				resolved, err := session.Stop(ctx, store, id)
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(out, resolved)
+				return err
 			}),
 		},
 		{
 			Use:     "rm <session>",
 			Short:   "Remove a stopped session; refuses to discard uncommitted or unreturned work",
-			Example: "  hewitt rm <full-session-id>",
+			Example: "  hewitt rm <session>",
 			Args:    sessionArg,
-			RunE: withStore(func(ctx context.Context, store *session.Store, id string, _ io.Writer) error {
-				return session.Remove(ctx, store, id)
+			RunE: withStore(func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
+				resolved, err := session.Remove(ctx, store, id)
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(out, resolved)
+				return err
 			}),
 		},
 		{
 			Use:     "diff <session>",
 			Short:   "Show a session's changes since its workspace was created",
-			Example: "  hewitt diff <full-session-id>",
+			Example: "  hewitt diff <session>",
 			Args:    sessionArg,
 			RunE:    withStore(session.Diff),
 		},

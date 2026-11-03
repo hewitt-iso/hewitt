@@ -307,3 +307,32 @@ func TestTerminalMetadataCompatibility(t *testing.T) {
 		t.Fatal("accepted unsupported terminal")
 	}
 }
+
+func TestStoreResolve(t *testing.T) {
+	store := testStore(t)
+	first := testMetadata()
+	first.ID = "0123456789abcdef" + strings.Repeat("a", 48)
+	first.Name = "codex-work"
+	second := testMetadata()
+	second.ID = "0123456789abcdee" + strings.Repeat("b", 48)
+	second.Name = "claude-work"
+	for _, m := range []Metadata{first, second} {
+		if err := store.Save(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ref := range []string{first.ID, first.ID[:16], "codex-work"} {
+		got, err := store.Resolve(ref)
+		if err != nil || got.ID != first.ID {
+			t.Fatalf("Resolve(%q) = %+v, %v; want %s", ref, got, err, first.ID)
+		}
+	}
+	if _, err := store.Resolve("0123456789abcde"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("Resolve ambiguous prefix = %v", err)
+	}
+	for _, ref := range []string{"missing", "deadbeef", strings.Repeat("c", 64)} {
+		if _, err := store.Resolve(ref); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Resolve(%q) = %v; want os.ErrNotExist", ref, err)
+		}
+	}
+}

@@ -290,6 +290,9 @@ func (c Client) RemoveNetwork(ctx context.Context, name string) error {
 }
 
 func notFound(err error) bool {
+	if errors.Is(err, exec.ErrNotFound) {
+		return false
+	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "no such container") || strings.Contains(message, "no such network") ||
 		strings.Contains(message, "not found")

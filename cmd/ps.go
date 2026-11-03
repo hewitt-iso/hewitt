@@ -11,16 +11,17 @@ import (
 )
 
 func newPSCommand(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "ps",
 		Short: "List saved sessions",
-		Long: "List all saved sessions from the configured data_dir in session ID order.\n" +
-			"Shows full IDs, agents, images, names, and creation times in UTC.\n" +
+		Long: "List saved sessions from the configured data_dir in session ID order.\n" +
+			"By default, stopped sessions are omitted; use --all (-a) to include them.\n" +
+			"Shows full IDs, agents, images, names, status, and creation times in UTC.\n" +
 			"An empty store prints only the table header. No files are created.\n\n" +
-			"Docker is not required or queried. Records describe creation intent, not live\n" +
-			"container status or agent readiness. Sessions remain listed after failed starts\n" +
-			"or external container removal until their metadata is deleted.",
-		Example: "  hewitt ps\n  hewitt ps --config /path/to/config.json",
+			"Docker is not required; when Docker is unavailable, status is reported as\n" +
+			"unknown and all saved sessions are listed.",
+		Example: "  hewitt ps\n  hewitt ps -a\n  hewitt ps --config /path/to/config.json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := session.NewStore(cfg.DataDir)
@@ -32,15 +33,19 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "ID\tAGENT\tIMAGE\tNAME\tCREATED"); err != nil {
+			if _, err := fmt.Fprintln(w, "ID\tAGENT\tIMAGE\tNAME\tSTATUS\tCREATED"); err != nil {
 				return fmt.Errorf("write session list: %w", err)
 			}
 			for _, m := range sessions {
+				status := session.Status(cmd.Context(), m)
+				if !all && status == "stopped" {
+					continue
+				}
 				name := m.Name
 				if name == "" {
 					name = "-"
 				}
-				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", m.ID, m.Agent, m.Image, name, m.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", m.ID, m.Agent, m.Image, name, status, m.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
 					return fmt.Errorf("write session list: %w", err)
 				}
 			}
@@ -50,4 +55,6 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&all, "all", "a", false, "show all sessions (default hides stopped sessions)")
+	return cmd
 }
