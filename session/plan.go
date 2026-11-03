@@ -83,7 +83,10 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 		s.danger[item] = true
 	}
 	if s.Agent == "" {
-		return settings{}, fmt.Errorf("select an agent: hewitt run <agent> or AGENT in the Hewittfile")
+		if s.Mode == "exec" {
+			return settings{}, fmt.Errorf("select an agent: hewitt run <agent> or AGENT in the Hewittfile")
+		}
+		s.Agent = "workspace"
 	}
 	if s.Mode == "" {
 		s.Mode = "new"
@@ -95,11 +98,15 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 		}
 	}
 	if s.Mode != "exec" && s.Image == "" {
-		adapter, err := agent.Lookup(s.Agent)
-		if err != nil {
-			return settings{}, err
+		if s.Agent == "workspace" {
+			s.Image = agent.DefaultImage
+		} else {
+			adapter, err := agent.Lookup(s.Agent)
+			if err != nil {
+				return settings{}, err
+			}
+			s.Image = adapter.DefaultImage()
 		}
-		s.Image = adapter.DefaultImage()
 	}
 	for _, spec := range s.Mounts {
 		m, err := parseMount(spec, s.Dir, true)
@@ -338,6 +345,9 @@ func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) 
 			dst = src
 		}
 		mounts = append(mounts, docker.BindMount{Source: src, Target: dst, ReadOnly: m.readOnly})
+	}
+	if adapter == nil {
+		return mounts, nil
 	}
 	rules, base := s.Rules, s.Dir
 	if rules != "" && !filepath.IsAbs(rules) {

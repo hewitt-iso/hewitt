@@ -178,7 +178,7 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		args []string
 		want string
 	}{
-		{args: []string{"run"}, want: "select an agent"},
+		{args: []string{"run"}, want: "locate repository"},
 		{args: []string{"run", "codex", "extra"}, want: "accepts at most 1 arg(s)"},
 		{args: []string{"run", "codex"}, want: "locate repository"},
 		{args: []string{"run", "codex", "--image", ""}, want: "image must be nonempty"},
@@ -297,7 +297,7 @@ if [ "$2" = inspect ]; then printf '%s\n' '{"Status":"exited","ExitCode":0}'; fi
 					if action == "run" {
 						args = append(args, "--detach")
 					}
-					want := "ghcr.io/hewitt-iso/hewitt-" + agent + ":latest"
+					want := "ghcr.io/hewitt-iso/hewitt:latest"
 					if override != "" {
 						args = append(args, "--image", override)
 						want = override

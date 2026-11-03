@@ -6,11 +6,11 @@ The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
 **Status:** early development. `login` uses the native Claude Code or Codex
-subscription login flow with a dedicated persistent profile. `run` starts the
-native agent in a persistent tmux terminal inside Docker; `--detach` starts it in
+subscription login flow with a dedicated persistent profile. `run` starts a
+workspace container with a persistent tmux terminal inside Docker; `--detach` starts it in
 the background, and `attach` reconnects. `ps` lists saved sessions and their
-status. `stop`, `rm`, and `diff` manage session lifecycles and workspace diffs.
-Each run creates a Git worktree on its own branch. `logs` is not implemented yet.
+status. `stop` and `rm` manage session lifecycles and workspace cleanup.
+Each agent window creates a Git worktree on its own branch. `logs` is not implemented yet.
 
 ## Requirements
 
@@ -56,10 +56,9 @@ The default version is `dev`. Without Make, use `go build -o bin/hewitt .` or
 
 ## Create and start a session
 
-`run` and `login` automatically select these images:
+`run` and `login` automatically select the unified workspace image:
 
-- `ghcr.io/hewitt-iso/hewitt-codex:latest`
-- `ghcr.io/hewitt-iso/hewitt-claude:latest`
+- `ghcr.io/hewitt-iso/hewitt:latest`
 
 Docker pulls a missing image on first use. Once cached, Docker uses the local
 copy; use `docker pull IMAGE` to update it. Published images must be public for
@@ -68,39 +67,25 @@ users to pull them without a registry login.
 To build locally instead (requires Docker and network access):
 
 ```sh
-make images  # also builds the existing OpenCode and egress images
-# Or build only one:
-make image-codex
-make image-claude
+make images  # builds hewitt:local and hewitt/egress:local
+# Or build only the workspace image:
+make image-hewitt
 ```
 
-Each build tags the image with both its default GHCR reference and a local
-alias (`hewitt-codex:local` or `hewitt-claude:local`). Hewitt uses the locally
-built GHCR tag without downloading it. To select specific client releases:
-
-```sh
-make image-codex CODEX_VERSION=<version>
-make image-claude CLAUDE_VERSION=<version>
-```
-
-Local builds default to Codex `latest` and Claude Code `stable`. The images use
-Node.js 24 on Debian Bookworm and include Git, Bash, ripgrep, tmux 3.3, `env`,
-CA certificates, and terminal definitions. The Dockerfile supports Linux amd64
-and arm64 builds and execution as the host UID/GID. Each build produces the
-builder's native architecture; the initial publishing workflow builds amd64
-images. Apple Silicon users can build locally
-for native arm64 execution or use Docker's amd64 emulation.
-Codex is installed from the official [`@openai/codex` package](https://github.com/openai/codex);
-Claude Code uses its official [native installer](https://code.claude.com/docs/en/setup).
-Claude auto-updates are disabled; updates go through image rebuilds. No login
-state is included in either image. The build context is limited to `images/`.
+Agents (`claude`, `codex`, `opencode`) are installed on demand into `<data_dir>/tools`
+(mounted at `/hewitt/tools`) the first time they are selected, so the base image
+stays small and installed CLIs persist across containers. Every new tmux window
+(`Ctrl-B, C`) prompts you to choose an agent (creating a fresh worktree for it)
+or open a shell in the current project directory.
 
 Log in and run:
 
 ```sh
 ./bin/hewitt login codex --profile personal
+./bin/hewitt run --profile personal --repo /path/to/repo
+# Or specify the initial agent directly:
 ./bin/hewitt run codex --profile personal --repo /path/to/repo
-# Detach with Ctrl-B then D, then reconnect:
+# Detach with Ctrl-D, then reconnect:
 ./bin/hewitt ps
 ./bin/hewitt attach <full-session-id>
 
@@ -435,29 +420,20 @@ packages, daemon, server, database, or cloud service are part of this foundation
 All commands are registered with help, examples, and argument validation. `run`
 implements container creation/startup, `ps` lists saved sessions and their
 status, `attach` connects to a running container terminal, `stop` stops a
-session's agent, `rm` safely removes a stopped session and its resources, and
-`diff` shows workspace changes. `logs` returns a "not implemented yet" error and
-exits with status 1.
+session's agent, and `rm` removes a stopped session and all its resources.
+`logs` returns a "not implemented yet" error and exits with status 1.
 
 | Command | Capability |
 | --- | --- |
-| `hewitt run <agent>` | Run a native agent in a persistent terminal and a new Git worktree |
-| `hewitt stop <session>` | Stop a session and print its full ID |
-| `hewitt rm <session>` | Remove a stopped session, safely clean up its resources, and print its full ID |
+| `hewitt run [agent]` | Run a workspace container with a persistent terminal and isolated Git worktrees |
+| `hewitt stop [session]` | Stop a session and print its full ID |
+| `hewitt rm [session]` | Remove a stopped session, clean up all its worktrees/resources, and print its full ID |
 | `hewitt logs <session>` | Read session output (not implemented yet) |
-| `hewitt diff <session>` | Inspect worktree or copy changes |
 
-`run` and `login` select Claude/Codex images automatically. OpenCode requires
-an explicit image (`--image`, or `FROM` for run sessions). `run --detach` starts
-without attaching.
-`ps` accepts no positional arguments. Session commands (`attach`, `stop`, `rm`,
-`diff`) accept a full 64-character hex ID, an unambiguous hex ID prefix, or a
+`run` and `login` select the `ghcr.io/hewitt-iso/hewitt:latest` image automatically.
+`run --detach` starts without attaching.
+`ps` accepts no positional arguments. Session commands (`attach`, `stop`, `rm`)
+accept a full 64-character hex ID, an unambiguous hex ID prefix, or a
 session name, and support shell tab completion (`hewitt completion`). When
 `<session>` is omitted on an interactive terminal, they open an interactive
 session picker.
-
-The `workspace` package creates worktrees and offers a safe removal API. Removal
-checks the repository and exact checkout path, refuses modified, untracked, or
-ignored files, uses Git without force, and retains the branch. It is not yet
-exposed through session `rm`; metadata deletion still removes only JSON files.
-Tests use temporary repositories and fake Docker executables.

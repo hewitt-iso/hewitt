@@ -71,24 +71,15 @@ func CreateCopy(dataDir, source string, paths []string) (Copy, error) {
 	return c, nil
 }
 
-// DiffCopy writes the agent's changes relative to the snapshot. It reads only.
-func DiffCopy(ctx context.Context, c Copy, out io.Writer) error {
+// RemoveCopy deletes the copy and its snapshot.
+func RemoveCopy(ctx context.Context, c Copy) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	if c.Base == "" {
-		return fmt.Errorf("copy %q predates snapshots; compare it with %q manually", c.Path, c.Source)
-	}
-	return gitStream(ctx, out, filepath.Dir(c.Path), "diff", "--no-index", "--", filepath.Base(c.Base), filepath.Base(c.Path))
-}
-
-// RemoveCopy deletes the copy and its snapshot only when the agent left no
-// changes, so unreturned work is never discarded.
-func RemoveCopy(ctx context.Context, c Copy) error {
-	if err := CheckCopyRemovable(ctx, c); err != nil {
-		return err
-	}
 	for _, dir := range []string{c.Path, c.Base} {
+		if dir == "" {
+			continue
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("remove copy %q: %w", dir, err)
 		}
@@ -111,7 +102,7 @@ func CheckCopyRemovable(ctx context.Context, c Copy) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", filepath.Dir(c.Path), "diff", "--no-index", "--quiet", "--", filepath.Base(c.Base), filepath.Base(c.Path))
 	var exitErr *exec.ExitError
 	if err := cmd.Run(); errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return fmt.Errorf("copy %q has changes; inspect with hewitt diff and return them before removal", c.Path)
+		return fmt.Errorf("copy %q has changes; inspect and return them before removal", c.Path)
 	} else if err != nil {
 		return fmt.Errorf("compare copy %q: %w", c.Path, err)
 	}

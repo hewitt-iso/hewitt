@@ -80,11 +80,11 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd.Args = cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs)
 	cmd.Use = "run [agent]"
-	cmd.Example = "  hewitt run codex --profile personal\n" +
-		"  hewitt run                       # settings from ./Hewittfile\n" +
+	cmd.Example = "  hewitt run                       # interactive agent picker in workspace container\n" +
+		"  hewitt run codex --profile personal\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
-	cmd.Long = short + ".\n\nFlags override the Hewittfile (Hewittfile in --repo, or --file); see README for its instructions.\nClaude, Codex, and OpenCode select their GHCR images automatically (FROM applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
+	cmd.Long = short + ".\n\nFlags override the Hewittfile (Hewittfile in --repo, or --file); see README for its instructions.\nSelects ghcr.io/hewitt-iso/hewitt:latest automatically (FROM applies to run only) and installs agents on demand into <data_dir>/tools.\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
 	cmd.Flags().StringVar(&image, "image", "", "override the default Claude/Codex image or Hewittfile FROM")
 	cmd.Flags().StringVar(&repository, "repo", ".", "source directory or Git repository (default: current directory)")
 	cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the new worktree from")

@@ -9,6 +9,9 @@ import (
 // ProfilePath is the stable container-visible mount point for native client state.
 const ProfilePath = "/hewitt/profile"
 
+// DefaultImage is the unified workspace image used when no image is specified.
+const DefaultImage = "ghcr.io/hewitt-iso/hewitt:latest"
+
 // Invocation contains only non-secret launch configuration. Credentials belong
 // to the native client's files, never to this structure.
 type Invocation struct {
@@ -71,7 +74,7 @@ func Lookup(name string) (Adapter, error) {
 // Claude uses the unmodified Claude Code binary and its own subscription login.
 type Claude struct{}
 
-func (Claude) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-claude:latest" }
+func (Claude) DefaultImage() string { return DefaultImage }
 
 func (Claude) Name() string    { return "claude" }
 func (Claude) Run() Invocation { return claudeInvocation() }
@@ -104,7 +107,7 @@ func claudeInvocation(args ...string) Invocation {
 // Codex uses a dedicated native file store so login survives container recreation.
 type Codex struct{}
 
-func (Codex) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-codex:latest" }
+func (Codex) DefaultImage() string { return DefaultImage }
 
 func (Codex) Name() string       { return "codex" }
 func (Codex) Run() Invocation    { return codexInvocation() }
@@ -137,7 +140,7 @@ func codexInvocation(args ...string) Invocation {
 // inside the profile.
 type OpenCode struct{}
 
-func (OpenCode) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-opencode:latest" }
+func (OpenCode) DefaultImage() string { return DefaultImage }
 
 func (OpenCode) Name() string       { return "opencode" }
 func (OpenCode) Run() Invocation    { return openCodeInvocation() }
@@ -171,11 +174,11 @@ func openCodeInvocation(args ...string) Invocation {
 func invocation(binary string, args, env, unset []string) Invocation {
 	// env -u removes conflicting credentials even if baked into an image's ENV.
 	// Arguments are passed directly, never interpolated into a shell command.
-	command := make([]string, 0, len(unset)*2+1+len(args))
+	command := make([]string, 0, len(unset)*2+2+len(args))
 	for _, key := range unset {
 		command = append(command, "-u", key)
 	}
-	command = append(command, binary)
+	command = append(command, "hewitt-agent", binary)
 	command = append(command, args...)
 	base := []string{
 		"HOME=" + ProfilePath + "/home",

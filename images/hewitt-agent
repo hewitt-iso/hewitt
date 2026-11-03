@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TOOLS_DIR="${HEWITT_TOOLS_DIR:-/hewitt/tools}"
+BIN_DIR="$TOOLS_DIR/bin"
+export PATH="$BIN_DIR:$PATH"
+
+ensure_agent() {
+	local agent="$1"
+	mkdir -p "$BIN_DIR"
+	if [ -x "$BIN_DIR/$agent" ]; then
+		return 0
+	fi
+	if command -v "$agent" >/dev/null 2>&1; then
+		return 0
+	fi
+	printf 'Installing %s into %s...\n' "$agent" "$TOOLS_DIR" >&2
+	case "$agent" in
+	claude)
+		local version="${CLAUDE_VERSION:-stable}"
+		local tmp
+		tmp="$(mktemp -d)"
+		curl -fsSL https://claude.ai/install.sh -o "$tmp/install-claude.sh"
+		HOME="$tmp" bash "$tmp/install-claude.sh" "$version"
+		cp -L "$tmp/.local/bin/claude" "$BIN_DIR/claude"
+		chmod 0755 "$BIN_DIR/claude"
+		rm -rf "$tmp"
+		;;
+	codex)
+		local version="${CODEX_VERSION:-latest}"
+		npm install --prefix "$TOOLS_DIR/codex" "@openai/codex@$version"
+		ln -sf "$TOOLS_DIR/codex/bin/codex" "$BIN_DIR/codex"
+		;;
+	opencode)
+		local version="${OPENCODE_VERSION:-latest}"
+		npm install --prefix "$TOOLS_DIR/opencode" "opencode-ai@$version"
+		ln -sf "$TOOLS_DIR/opencode/bin/opencode" "$BIN_DIR/opencode"
+		;;
+	*)
+		printf 'Unsupported agent: %s\n' "$agent" >&2
+		return 1
+		;;
+	esac
+}
+
+create_worktree_if_needed() {
+	if [ "${HEWITT_WORKSPACE_MODE:-worktree}" != "worktree" ]; then
+		return 0
+	fi
+	if [ -n "${HEWITT_INITIAL_WORKTREE_READY:-}" ]; then
+		unset HEWITT_INITIAL_WORKTREE_READY
+		return 0
+	fi
+	if [ -z "${HEWITT_REPO:-}" ] || [ -z "${HEWITT_WORKTREES_DIR:-}" ]; then
+		return 0
+	fi
+	local token
+	token="$(head -c 10 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+	local wt_path="$HEWITT_WORKTREES_DIR/$token"
+	local branch="hewitt/$token"
+	local base="${HEWITT_BASE:-HEAD}"
+	mkdir -p "$HEWITT_WORKTREES_DIR"
+	git -C "$HEWITT_REPO" worktree add -b "$branch" -- "$wt_path" "$base" >&2
+	local target="$wt_path"
+	if [ -n "${HEWITT_SUBDIR:-}" ] && [ "$HEWITT_SUBDIR" != "." ]; then
+		target="$wt_path/$HEWITT_SUBDIR"
+	fi
+	cd "$target"
+}
+
+exec_agent() {
+	local agent="$1"
+	shift
+	ensure_agent "$agent"
+	local profile_root="${HEWITT_PROFILES_DIR:-/hewitt/profiles}/$agent"
+	if [ ! -d "$profile_root" ] && [ -d "/hewitt/profile" ]; then
+		profile_root="/hewitt/profile"
+	fi
+	export HOME="$profile_root/home"
+	export XDG_CONFIG_HOME="$profile_root/config"
+	export XDG_DATA_HOME="$profile_root/data"
+	export XDG_STATE_HOME="$profile_root/state"
+	export XDG_CACHE_HOME="$profile_root/cache"
+	mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$profile_root/$agent" 2>/dev/null || true
+
+	if [ -f "$profile_root/token.env" ]; then
+		set -a
+		# shellcheck disable=SC1090
+		. "$profile_root/token.env"
+		set +a
+	fi
+
+	case "$agent" in
+	claude)
+		export CLAUDE_CONFIG_DIR="$profile_root/claude"
+		export DISABLE_AUTOUPDATER=1
+		exec env \
+			-u ANTHROPIC_API_KEY \
+			-u ANTHROPIC_AUTH_TOKEN \
+			-u ANTHROPIC_BASE_URL \
+			-u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
+			-u CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR \
+			-u CLAUDE_CODE_USE_BEDROCK \
+			-u CLAUDE_CODE_USE_VERTEX \
+			-u CLAUDE_CODE_USE_FOUNDRY \
+			claude "$@"
+		;;
+	codex)
+		export CODEX_HOME="$profile_root/codex"
+		exec env \
+			-u OPENAI_API_KEY \
+			-u CODEX_API_KEY \
+			-u CODEX_ACCESS_TOKEN \
+			-u OPENAI_BASE_URL \
+			-u OPENAI_IDENTITY_TOKEN_FILE \
+			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
+			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' "$@"
+		;;
+	opencode)
+		export OPENCODE_DISABLE_AUTOUPDATE=1
+		exec env \
+			-u OPENCODE_DISABLE_DEFAULT_PLUGINS \
+			-u OPENCODE_CONFIG \
+			-u OPENCODE_CONFIG_CONTENT \
+			opencode "$@"
+		;;
+	*)
+		printf 'Unsupported agent: %s\n' "$agent" >&2
+		exit 1
+		;;
+	esac
+}
+
+exec_shell() {
+	local dir_name
+	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
+	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
+		tmux rename-window "shell:$dir_name" 2>/dev/null || true
+	fi
+	export PS1="[$dir_name] \W \$ "
+	exec bash --norc -i
+}
+
+pick_interactive() {
+	local dir_name
+	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
+	local options=(
+		"claude    (new worktree)"
+		"codex     (new worktree)"
+		"opencode  (new worktree)"
+		"shell     ($dir_name)"
+	)
+	local selected=0
+	local count=${#options[@]}
+
+	draw_menu() {
+		local redraw="${1:-0}"
+		if [ "$redraw" = "1" ]; then
+			printf '\033[%dA\r\033[J' "$((count + 1))" >&2
+		fi
+		printf 'Select agent or shell for %s (↑/↓ or j/k, Enter to select, q to close):\r\n' "$dir_name" >&2
+		local i
+		for ((i = 0; i < count; i++)); do
+			local cursor=" "
+			if [ "$i" -eq "$selected" ]; then
+				cursor=">"
+			fi
+			printf '%s %d) %s\r\n' "$cursor" "$((i + 1))" "${options[$i]}" >&2
+		done
+	}
+
+	draw_menu 0
+	while IFS= read -rsn1 key; do
+		case "$key" in
+		"")
+			break
+			;;
+		q | Q)
+			exit 0
+			;;
+		k | K)
+			if [ "$selected" -gt 0 ]; then
+				selected=$((selected - 1))
+				draw_menu 1
+			fi
+			;;
+		j | J)
+			if [ "$selected" -lt $((count - 1)) ]; then
+				selected=$((selected + 1))
+				draw_menu 1
+			fi
+			;;
+		[1-4])
+			selected=$((key - 1))
+			draw_menu 1
+			break
+			;;
+		$'\x1b')
+			IFS= read -rsn2 -t 0.1 rest || true
+			case "$rest" in
+			"[A")
+				if [ "$selected" -gt 0 ]; then
+					selected=$((selected - 1))
+					draw_menu 1
+				fi
+				;;
+			"[B")
+				if [ "$selected" -lt $((count - 1)) ]; then
+					selected=$((selected + 1))
+					draw_menu 1
+				fi
+				;;
+			esac
+			;;
+		esac
+	done
+
+	case "$selected" in
+	0) printf 'claude\n' ;;
+	1) printf 'codex\n' ;;
+	2) printf 'opencode\n' ;;
+	3) printf 'shell\n' ;;
+	esac
+}
+
+cmd="${1:-}"
+case "$cmd" in
+ensure)
+	shift
+	agent="$1"
+	shift
+	ensure_agent "$agent"
+	exec "$agent" "$@"
+	;;
+run)
+	shift
+	choice="${1:-}"
+	if [ -z "$choice" ]; then
+		choice="$(pick_interactive)"
+	fi
+	if [ "$choice" = "shell" ]; then
+		exec_shell
+	fi
+	create_worktree_if_needed
+	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
+		tmux rename-window "$choice:$(basename "$PWD")" 2>/dev/null || true
+	fi
+	exec_agent "$choice"
+	;;
+"")
+	choice="$(pick_interactive)"
+	if [ "$choice" = "shell" ]; then
+		exec_shell
+	fi
+	create_worktree_if_needed
+	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
+		tmux rename-window "$choice:$(basename "$PWD")" 2>/dev/null || true
+	fi
+	exec_agent "$choice"
+	;;
+*)
+	ensure_agent "$cmd"
+	shift
+	exec "$cmd" "$@"
+	;;
+esac

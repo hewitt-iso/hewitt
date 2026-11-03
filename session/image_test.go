@@ -10,9 +10,10 @@ func TestRunImagePrecedence(t *testing.T) {
 	for _, tt := range []struct {
 		name, client, file, image, mode, target, want string
 	}{
-		{name: "codex default", client: "codex", want: "ghcr.io/hewitt-iso/hewitt-codex:latest"},
-		{name: "claude default", client: "claude", want: "ghcr.io/hewitt-iso/hewitt-claude:latest"},
-		{name: "opencode default", client: "opencode", want: "ghcr.io/hewitt-iso/hewitt-opencode:latest"},
+		{name: "workspace default", client: "", want: "ghcr.io/hewitt-iso/hewitt:latest"},
+		{name: "codex default", client: "codex", want: "ghcr.io/hewitt-iso/hewitt:latest"},
+		{name: "claude default", client: "claude", want: "ghcr.io/hewitt-iso/hewitt:latest"},
+		{name: "opencode default", client: "opencode", want: "ghcr.io/hewitt-iso/hewitt:latest"},
 		{name: "file overrides default", client: "codex", file: "FROM project:test\n", want: "project:test"},
 		{name: "flag overrides file", client: "codex", file: "FROM project:test\n", image: "custom:test", want: "custom:test"},
 		{name: "exec has no default image", client: "codex", mode: "exec", target: "external"},

@@ -105,7 +105,7 @@ func TestSessionCommandInputs(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"attach", "stop", "rm", "logs", "diff"} {
+	for _, name := range []string{"attach", "stop", "rm", "logs"} {
 		for _, arg := range []string{"", " \t "} {
 			_, err := executeCommand(t, name, arg)
 			if err == nil || err.Error() != "session must not be empty" {

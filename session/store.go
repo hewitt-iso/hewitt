@@ -340,7 +340,7 @@ func (m Metadata) validate() error {
 
 func validateAgent(agent string) error {
 	switch agent {
-	case "claude", "codex", "opencode":
+	case "claude", "codex", "opencode", "workspace":
 		return nil
 	default:
 		return fmt.Errorf("unsupported session agent")
