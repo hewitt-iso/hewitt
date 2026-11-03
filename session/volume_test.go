@@ -86,7 +86,9 @@ func TestVolumeScriptsRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(v.Path, "untracked"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if dirty := script(t, dirtyScript, v.Path); strings.TrimSpace(dirty) != v.Path {
+	// Git reports resolved paths (macOS /var is a symlink to /private/var).
+	real, _ := filepath.EvalSymlinks(v.Path)
+	if dirty := script(t, dirtyScript, v.Path); strings.TrimSpace(dirty) != real {
 		t.Fatalf("dirty = %q", dirty)
 	}
 
