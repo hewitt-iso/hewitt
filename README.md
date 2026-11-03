@@ -109,7 +109,11 @@ defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
 are required. Native credentials remain in the private profile directory; do not
-use one profile concurrently or commit it. Login output is not recorded by Docker.
+commit it. Login output is not recorded by Docker.
+
+Sessions may share a profile. Codex refreshes its own tokens in the shared
+`auth.json` and reloads it when another session has already refreshed; if two
+sessions refresh at the same moment, one may need `hewitt login codex` again.
 
 `run` saves metadata before startup, starts a foreground tmux server inside the
 container, and launches the native agent once in a detached tmux session. It
