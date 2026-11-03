@@ -43,7 +43,7 @@ func proxyEnv() []string {
 func createEgress(ctx context.Context, dataDir, image string, hosts []string) (Egress, error) {
 	for _, host := range hosts {
 		if !egressHost.MatchString(host) {
-			return Egress{}, fmt.Errorf("ALLOW host %q must be a lowercase DNS name, optionally prefixed with *.", host)
+			return Egress{}, fmt.Errorf("egress.allow host %q must be a lowercase DNS name, optionally prefixed with *.", host)
 		}
 	}
 	token := strings.ToLower(rand.Text())
