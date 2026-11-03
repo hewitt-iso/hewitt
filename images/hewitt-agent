@@ -269,7 +269,22 @@ pick_interactive() {
 	esac
 }
 
+load_tmux_conf() {
+	if ! command -v tmux >/dev/null 2>&1 || [ -z "${TMUX:-}" ]; then
+		return 0
+	fi
+	local conf
+	for conf in "${HEWITT_PROFILES_DIR:-/hewitt/profiles}/claude/home/.tmux.conf" "/hewitt/profile/home/.tmux.conf"; do
+		if [ -f "$conf" ]; then
+			tmux source-file "$conf" 2>/dev/null || true
+			tmux bind-key -n C-c kill-window \; bind-key -n C-d detach-client \; set-option -g default-command hewitt-agent 2>/dev/null || true
+			break
+		fi
+	done
+}
+
 cmd="${1:-}"
+load_tmux_conf
 case "$cmd" in
 ensure)
 	shift

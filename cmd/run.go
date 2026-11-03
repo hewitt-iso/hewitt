@@ -4,12 +4,13 @@ import (
 	"fmt"
 
 	"github.com/hewitt-iso/hewitt/config"
+	"github.com/hewitt-iso/hewitt/profile"
 	"github.com/hewitt-iso/hewitt/session"
 	"github.com/spf13/cobra"
 )
 
 func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
-	var image, name, profile, repository, base string
+	var image, name, profileID, repository, base string
 	var file, mode, target, workspace, isolation string
 	var danger []string
 	var detach bool
@@ -35,7 +36,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			if cmd.Flags().Changed("image") && image == "" {
 				return fmt.Errorf("image must be nonempty")
 			}
-			opts := session.AgentOptions{Image: image, Name: name, Profile: profile, DataDir: cfg.DataDir, Repository: repository}
+			opts := session.AgentOptions{Image: image, Name: name, Profile: profileID, DataDir: cfg.DataDir, Repository: repository}
 			if len(args) > 0 {
 				opts.Agent = args[0]
 			}
@@ -50,30 +51,21 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 				opts.Base = base
 			}
 			opts.File, opts.Mode, opts.Target, opts.Workspace, opts.Isolation, opts.Danger = file, mode, target, workspace, isolation, danger
-			id, err := session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
-			if err != nil {
-				return err
+			if isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
+				start, err := runOnboarding(cmd, cfg, &opts)
+				if err != nil {
+					return err
+				}
+				if !start {
+					_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Onboarding complete. Run 'hewitt run' to start a workspace.")
+					return err
+				}
 			}
-			if detach {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
-				return err
-			}
-			reconnect := shortID(id)
-			if name != "" {
-				reconnect = name
-			}
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
-				return fmt.Errorf("report session %q (container preserved): %w", id, err)
-			}
-			store, err := session.NewStore(cfg.DataDir)
-			if err != nil {
-				return err
-			}
-			return session.Attach(cmd.Context(), store, id, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			return executeRun(cmd, cfg, opts, detach)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "optional Docker container name")
-	cmd.Flags().StringVar(&profile, "profile", "default", "persistent profile ID, scoped to the agent")
+	cmd.Flags().StringVar(&profileID, "profile", "default", "persistent profile ID, scoped to the agent")
 	if action != "run" {
 		cmd.Flags().StringVar(&image, "image", "", "override the default Claude/Codex image (required for OpenCode)")
 		return cmd
@@ -96,4 +88,27 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&isolation, "isolation", "", "isolation level: shared, isolated, restricted, or hardened")
 	cmd.Flags().StringSliceVar(&danger, "danger", nil, "explicitly allow weakening: network, host-paths, writable-root, symlinks")
 	return cmd
+}
+
+func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOptions, detach bool) error {
+	id, err := session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	if detach {
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
+		return err
+	}
+	reconnect := shortID(id)
+	if opts.Name != "" {
+		reconnect = opts.Name
+	}
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
+		return fmt.Errorf("report session %q (container preserved): %w", id, err)
+	}
+	store, err := session.NewStore(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	return session.Attach(cmd.Context(), store, id, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 }

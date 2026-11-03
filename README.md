@@ -39,7 +39,10 @@ make build
 ./bin/hewitt --version
 ```
 
-With no arguments, Hewitt validates configuration and prints help. Unknown
+With no arguments, Hewitt validates configuration and prints help (or runs a
+3-step interactive onboarding prompt on the first terminal run to optionally
+import host skills/MCP/tmux configs, choose whether to start a workspace, and
+share or log in to agent credentials). Unknown
 commands and flags fail with a nonzero exit status. Help and version do not load
 configuration or require any external services.
 
