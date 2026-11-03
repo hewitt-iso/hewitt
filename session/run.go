@@ -32,7 +32,10 @@ func createAgentContainer(ctx context.Context, store *Store, opts docker.CreateO
 	if err != nil {
 		return Metadata{}, err
 	}
-	m.ID, m.Image, m.Name, m.CreatedAt = id, opts.Image, opts.Name, time.Now().UTC()
+	m.ID, m.Image, m.CreatedAt = id, opts.Image, time.Now().UTC()
+	if opts.Name != "" {
+		m.Name = opts.Name
+	}
 	if err := store.Save(m); err != nil {
 		return m, fmt.Errorf("record container %q (container preserved, startup not attempted): %w", id, err)
 	}

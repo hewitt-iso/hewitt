@@ -30,9 +30,13 @@ type CreateOptions struct {
 	Entrypoint string
 	Env        []string
 	// EnvFiles are read by the Docker CLI; explicit Env entries take precedence.
-	EnvFiles    []string
-	Mounts      []BindMount
-	User        string
+	EnvFiles []string
+	Mounts   []BindMount
+	Volumes  []VolumeMount
+	User     string
+	// CapAdd restores single capabilities after --cap-drop ALL; only one-shot
+	// helpers use it.
+	CapAdd      []string
 	Workdir     string
 	DisableLogs bool
 	DisableTTY  bool
@@ -50,6 +54,11 @@ type CreateOptions struct {
 type BindMount struct {
 	Source, Target string
 	ReadOnly       bool
+}
+
+// VolumeMount mounts a named Docker volume.
+type VolumeMount struct {
+	Name, Target string
 }
 
 // Validate checks options before any filesystem or Docker side effects.
@@ -96,6 +105,19 @@ func (opts CreateOptions) Validate() error {
 			return fmt.Errorf("bind mount paths must be absolute and contain no commas or control characters")
 		}
 	}
+	for _, volume := range opts.Volumes {
+		if err := validateArgument("volume name", volume.Name); err != nil {
+			return err
+		}
+		if !strings.HasPrefix(volume.Target, "/") || strings.ContainsAny(volume.Name+volume.Target, ",\x00\r\n") {
+			return fmt.Errorf("volume targets must be absolute and contain no commas or control characters")
+		}
+	}
+	for _, capability := range opts.CapAdd {
+		if err := validateArgument("capability", capability); err != nil {
+			return err
+		}
+	}
 	for _, arg := range opts.Command {
 		if strings.ContainsRune(arg, 0) {
 			return fmt.Errorf("container command contains NUL")
@@ -111,16 +133,55 @@ func (c Client) Create(ctx context.Context, opts CreateOptions) (string, error) 
 	if err := opts.Validate(); err != nil {
 		return "", err
 	}
-	args := []string{
-		"container", "create",
-		"--pull", "missing",
-		"--init", "--interactive",
-	}
+	args := []string{"container", "create", "--pull", "missing", "--init", "--interactive"}
 	if !opts.DisableTTY {
 		args = append(args, "--tty")
 	}
-	args = append(args, "--label", "io.hewitt.managed=true",
-		"--cap-drop", "ALL", "--security-opt", "no-new-privileges=true")
+	args = append(args, containerArgs(opts)...)
+	out, err := c.execute(ctx, args...)
+	if err != nil {
+		return "", fmt.Errorf("create container: %w", err)
+	}
+	id := strings.TrimSpace(out)
+	if len(id) != 64 || strings.ContainsAny(id, "\r\n") || strings.Trim(id, "0123456789abcdef") != "" {
+		return "", fmt.Errorf("create container: Docker returned an invalid container ID; inspect containers with label io.hewitt.managed=true")
+	}
+	return id, nil
+}
+
+// Run runs a one-shot helper container to completion and removes it. Its
+// standard output is streamed to stdout; stdin and a terminal are not attached.
+func (c Client) Run(ctx context.Context, opts CreateOptions, stdout io.Writer) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	args := append([]string{"container", "run", "--rm", "--pull", "missing", "--init"}, containerArgs(opts)...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return fmt.Errorf("run helper container: %w: %s", err, detail)
+		}
+		return fmt.Errorf("run helper container: %w", err)
+	}
+	return nil
+}
+
+// containerArgs returns the flags shared by create and run, then the image
+// and command.
+func containerArgs(opts CreateOptions) []string {
+	args := []string{"--label", "io.hewitt.managed=true",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges=true"}
+	for _, capability := range opts.CapAdd {
+		args = append(args, "--cap-add", capability)
+	}
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
 	}
@@ -160,17 +221,48 @@ func (c Client) Create(ctx context.Context, opts CreateOptions) (string, error) 
 		}
 		args = append(args, "--mount", spec)
 	}
+	for _, volume := range opts.Volumes {
+		args = append(args, "--mount", "type=volume,src="+volume.Name+",dst="+volume.Target)
+	}
 	args = append(args, "--", opts.Image)
-	args = append(args, opts.Command...)
-	out, err := c.execute(ctx, args...)
-	if err != nil {
-		return "", fmt.Errorf("create container: %w", err)
+	return append(args, opts.Command...)
+}
+
+// CreateVolume creates a labeled named volume. Creating an existing volume
+// succeeds, so callers must choose unique names.
+func (c Client) CreateVolume(ctx context.Context, name string) error {
+	if err := validateArgument("volume name", name); err != nil {
+		return err
 	}
-	id := strings.TrimSpace(out)
-	if len(id) != 64 || strings.ContainsAny(id, "\r\n") || strings.Trim(id, "0123456789abcdef") != "" {
-		return "", fmt.Errorf("create container: Docker returned an invalid container ID; inspect containers with label io.hewitt.managed=true")
+	if _, err := c.execute(ctx, "volume", "create", "--label", "io.hewitt.managed=true", "--", name); err != nil {
+		return fmt.Errorf("create volume %q: %w", name, err)
 	}
-	return id, nil
+	return nil
+}
+
+// VolumeExists reports whether Docker knows a volume.
+func (c Client) VolumeExists(ctx context.Context, name string) (bool, error) {
+	if err := validateArgument("volume name", name); err != nil {
+		return false, err
+	}
+	if _, err := c.execute(ctx, "volume", "inspect", "--", name); err != nil {
+		if notFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect volume %q: %w", name, err)
+	}
+	return true, nil
+}
+
+// RemoveVolume deletes a volume no container uses. A missing volume is not an error.
+func (c Client) RemoveVolume(ctx context.Context, name string) error {
+	if err := validateArgument("volume name", name); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "volume", "rm", "--", name); err != nil && !notFound(err) {
+		return fmt.Errorf("remove volume %q: %w", name, err)
+	}
+	return nil
 }
 
 // CreateNetwork creates a labeled network and returns its ID. An internal
@@ -295,6 +387,7 @@ func notFound(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "no such container") || strings.Contains(message, "no such network") ||
+		strings.Contains(message, "no such volume") ||
 		strings.Contains(message, "not found")
 }
 

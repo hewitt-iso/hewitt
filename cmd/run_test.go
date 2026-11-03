@@ -83,7 +83,7 @@ func TestRun(t *testing.T) {
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			t.Setenv("HEWITT_TEST_FAILURE", tt.failure)
 			dataDir := filepath.Join(dir, ".hewitt")
-			args := []string{"run", "codex", "--detach", "--image", "my-codex:local", "--name", "hewitt-test", "--repo", ".", "--base", "HEAD"}
+			args := []string{"run", "codex", "--detach", "--image", "my-codex:local", "--name", "hewitt-test", "--repo", ".", "--base", "HEAD", "--workspace", "worktree", "--isolation", "shared"}
 			if tt.customDir {
 				dataDir = filepath.Join(dir, "custom-data")
 				cfg, err := json.Marshal(config.Config{DataDir: dataDir})
@@ -237,7 +237,7 @@ esac
 			root.SetOut(&out)
 			root.SetErr(&diagnostics)
 			root.SetIn(strings.NewReader(""))
-			root.SetArgs([]string{"run", "codex", "--image", "agent:test"})
+			root.SetArgs([]string{"run", "codex", "--image", "agent:test", "--workspace", "worktree", "--danger", "host-paths"})
 			err := root.Execute()
 			if (err != nil) != failure {
 				t.Fatalf("error = %v", err)
@@ -295,7 +295,7 @@ if [ "$2" = inspect ]; then printf '%s\n' '{"Status":"exited","ExitCode":0}'; fi
 					}
 					args := []string{action, agent}
 					if action == "run" {
-						args = append(args, "--detach")
+						args = append(args, "--detach", "--workspace", "worktree", "--danger", "host-paths")
 					}
 					want := "ghcr.io/hewitt-iso/hewitt:latest"
 					if override != "" {

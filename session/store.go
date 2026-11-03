@@ -27,6 +27,7 @@ import (
 type Metadata struct {
 	Workspace *workspace.Worktree `json:"workspace,omitempty"`
 	Copy      *workspace.Copy     `json:"copy,omitempty"`
+	Volume    *workspace.Volume   `json:"volume,omitempty"`
 	Egress    *Egress             `json:"egress,omitempty"`
 	// Mode is empty for sessions created before launch modes existed (new).
 	// Container is the external target of exec and sidecar sessions; exec
@@ -288,6 +289,11 @@ func (m Metadata) validate() error {
 	}
 	if m.Copy != nil {
 		if err := m.Copy.Validate(); err != nil {
+			return err
+		}
+	}
+	if m.Volume != nil {
+		if err := m.Volume.Validate(); err != nil {
 			return err
 		}
 	}

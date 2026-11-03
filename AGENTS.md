@@ -23,8 +23,11 @@ do not make separate API credits a prerequisite.
   Git workspaces and persist their locations before container startup. Native agent invocation and
   profile preparation already live in `agent` and `profile`. Add packages only with working behavior; do not create empty
   packages or speculative interfaces.
-- `workspace`: Git worktree creation on unique branches and safe removal that
-  refuses uncommitted, untracked, or ignored files and retains branches.
+- `workspace`: host-side Git for session workspaces: volume preparation (base
+  anchor, identity, credential-free origin) and bundle import into
+  `hewitt/<name>/*`; legacy worktree creation and safe removal that refuses
+  uncommitted, untracked, or ignored files and retains branches. Host Git must
+  never open a session's container-owned repository.
 - `agent`: native Claude Code, Codex, OpenCode, Pi, and Antigravity run/login descriptions (`agent.Names` lists them) and default image
   tags, independent of Cobra.
 - `images`: unified workspace Docker image with on-demand agent installation

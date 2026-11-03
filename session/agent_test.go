@@ -32,7 +32,7 @@ esac
 		t.Fatal(err)
 	}
 	for _, client := range []string{"claude", "codex"} {
-		opts := AgentOptions{Agent: client, Image: "agent:test", Profile: "personal", DataDir: data}
+		opts := AgentOptions{Agent: client, Image: "agent:test", Profile: "personal", DataDir: data, Workspace: "worktree", Danger: []string{"host-paths"}}
 		var out, stderr bytes.Buffer
 		// A file is passed to Docker directly, so the token remains to be read
 		// after the attached login; a terminal behaves the same way.
