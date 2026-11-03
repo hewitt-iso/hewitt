@@ -170,3 +170,137 @@ esac
 		}
 	}
 }
+
+type fakeTTYReader struct {
+	*strings.Reader
+}
+
+func (fakeTTYReader) isTerminal() bool { return true }
+
+func TestInteractiveSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("PATH", home)
+
+	secondID := strings.Repeat("b", 64)
+	script := `#!/bin/sh
+case "$2" in
+inspect)
+  if [ "$6" = "` + containerID + `" ]; then printf 'true\n'; else printf 'false\n'; fi
+  ;;
+stop) exit 0 ;;
+rm) exit 0 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := session.NewStore(filepath.Join(home, ".hewitt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := session.Metadata{
+		ID: containerID, Agent: "codex", Image: "codex:local",
+		Name: "first-session", CreatedAt: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
+	}
+	second := session.Metadata{
+		ID: secondID, Agent: "claude", Image: "claude:local",
+		Name: "second-session", CreatedAt: time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC),
+	}
+	for _, m := range []session.Metadata{first, second} {
+		if err := store.Save(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Select running session with Enter in stop (only first is running).
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand("test")
+	root.SetIn(fakeTTYReader{strings.NewReader("\n")})
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"stop"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("interactive stop: %v", err)
+	}
+	if stdout.String() != containerID+"\n" {
+		t.Fatalf("interactive stop stdout = %q, want %s", stdout.String(), containerID)
+	}
+	if !strings.Contains(stderr.String(), containerID[:12]) || !strings.Contains(stderr.String(), "first-session") {
+		t.Fatalf("interactive stop picker stderr = %q", stderr.String())
+	}
+
+	// Remove stopped session using arrow-down / number selection when multiple candidates exist.
+	// Without docker on PATH, both sessions have status "unknown" and appear in picker.
+	t.Setenv("PATH", t.TempDir())
+	for _, input := range []string{"\x1b[B\r", "j\n", "2\n"} {
+		stdout.Reset()
+		stderr.Reset()
+		root = NewRootCommand("test")
+		root.SetIn(fakeTTYReader{strings.NewReader(input)})
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.SetArgs([]string{"stop"})
+		err = root.Execute()
+		// Docker is absent so stop fails after picking secondID; verify secondID was selected.
+		if err == nil || !strings.Contains(err.Error(), secondID) {
+			t.Fatalf("input %q: error = %v, want stop attempt for %s", input, err, secondID)
+		}
+	}
+
+	// Cancellation via 'q' or Esc returns a cancellation error without side effects.
+	for _, input := range []string{"q", "\x1b"} {
+		stdout.Reset()
+		stderr.Reset()
+		root = NewRootCommand("test")
+		root.SetIn(fakeTTYReader{strings.NewReader(input)})
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.SetArgs([]string{"stop"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("input %q: error = %v, want cancelled", input, err)
+		}
+	}
+}
+
+func TestSessionCompletion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("PATH", home)
+
+	// Completion script generation must work even when config is broken.
+	broken := filepath.Join(home, "broken.json")
+	if err := os.WriteFile(broken, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := executeCommand(t, "completion", "bash", "--config", broken)
+	if err != nil || !strings.Contains(out, "bash completion") {
+		t.Fatalf("completion bash = %q, %v", out, err)
+	}
+
+	store, err := session.NewStore(filepath.Join(home, ".hewitt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := session.Metadata{
+		ID: containerID, Agent: "codex", Image: "codex:local",
+		Name: "my-codex", CreatedAt: time.Now().UTC(),
+	}
+	if err := store.Save(m); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand("test")
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"__complete", "attach", ""})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "my-codex") || !strings.Contains(stdout.String(), containerID[:12]) {
+		t.Fatalf("__complete attach = %q", stdout.String())
+	}
+}

@@ -66,14 +66,30 @@ func TestPS(t *testing.T) {
 			lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 			want := []string{
 				"ID AGENT IMAGE NAME STATUS CREATED",
-				containerID + " codex my-codex:local - unknown 2026-11-01T12:00:00Z",
-				second.ID + " claude my-claude:local hewitt-claude unknown 2026-11-01T11:00:00Z",
+				containerID[:12] + " codex my-codex:local - unknown 2026-11-01T12:00:00Z",
+				second.ID[:12] + " claude my-claude:local hewitt-claude unknown 2026-11-01T11:00:00Z",
 			}
 			for i := range lines {
 				lines[i] = strings.Join(strings.Fields(lines[i]), " ")
 			}
 			if !reflect.DeepEqual(lines, want) {
 				t.Fatalf("list = %q, want %q", lines, want)
+			}
+			outFull, err := executeCommand(t, append(append([]string{}, args...), "--no-trunc")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			linesFull := strings.Split(strings.TrimSuffix(outFull, "\n"), "\n")
+			wantFull := []string{
+				"ID AGENT IMAGE NAME STATUS CREATED",
+				containerID + " codex my-codex:local - unknown 2026-11-01T12:00:00Z",
+				second.ID + " claude my-claude:local hewitt-claude unknown 2026-11-01T11:00:00Z",
+			}
+			for i := range linesFull {
+				linesFull[i] = strings.Join(strings.Fields(linesFull[i]), " ")
+			}
+			if !reflect.DeepEqual(linesFull, wantFull) {
+				t.Fatalf("list (--no-trunc) = %q, want %q", linesFull, wantFull)
 			}
 			for _, m := range []session.Metadata{first, second} {
 				got, err := store.Get(m.ID)
@@ -94,7 +110,7 @@ func TestPS(t *testing.T) {
 			lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 			wantRunningOnly := []string{
 				"ID AGENT IMAGE NAME STATUS CREATED",
-				containerID + " codex my-codex:local - running 2026-11-01T12:00:00Z",
+				containerID[:12] + " codex my-codex:local - running 2026-11-01T12:00:00Z",
 			}
 			for i := range lines {
 				lines[i] = strings.Join(strings.Fields(lines[i]), " ")
@@ -109,8 +125,8 @@ func TestPS(t *testing.T) {
 			lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 			wantWithDockerAll := []string{
 				"ID AGENT IMAGE NAME STATUS CREATED",
-				containerID + " codex my-codex:local - running 2026-11-01T12:00:00Z",
-				second.ID + " claude my-claude:local hewitt-claude stopped 2026-11-01T11:00:00Z",
+				containerID[:12] + " codex my-codex:local - running 2026-11-01T12:00:00Z",
+				second.ID[:12] + " claude my-claude:local hewitt-claude stopped 2026-11-01T11:00:00Z",
 			}
 			for i := range lines {
 				lines[i] = strings.Join(strings.Fields(lines[i]), " ")

@@ -228,12 +228,14 @@ settings after the first push to enable anonymous pulls.
 ```sh
 ./bin/hewitt ps
 ./bin/hewitt ps -a
+./bin/hewitt ps --no-trunc
 ./bin/hewitt ps --config /path/to/config.json
 ```
 
 `ps` lists saved sessions from the configured `data_dir`, ordered by session
 ID. By default, stopped sessions are omitted; pass `-a` (`--all`) to include
-stopped sessions. The table includes `ID` (the full container ID), `AGENT`,
+stopped sessions. The table includes `ID` (12-character short ID by default, or
+the full 64-character ID with `--no-trunc`), `AGENT`,
 `IMAGE`, `NAME` (`-` when not supplied), `STATUS` (`running`, `stopped`, or
 `unknown`), and `CREATED` (a UTC RFC 3339 timestamp). An empty or missing store
 prints only the header and creates no files or directories. Invalid or
@@ -250,10 +252,12 @@ saved do not appear.
 ```sh
 ./bin/hewitt ps
 ./bin/hewitt attach <session>
+./bin/hewitt attach              # interactive session picker on a terminal
 ```
 
 `attach` resolves the session from the configured `data_dir` by full ID,
-unambiguous hex ID prefix, or session name, and connects to the existing tmux
+unambiguous hex ID prefix, or session name (or opens an interactive selector
+when `<session>` is omitted on an interactive terminal), and connects to the existing tmux
 session using `docker container exec --interactive --tty`. Docker handles
 terminal mode and resizing; Hewitt restores terminal settings after
 cancellation. Attachment uses the `xterm-256color` terminal type.
@@ -448,7 +452,9 @@ an explicit image (`--image`, or `FROM` for run sessions). `run --detach` starts
 without attaching.
 `ps` accepts no positional arguments. Session commands (`attach`, `stop`, `rm`,
 `diff`) accept a full 64-character hex ID, an unambiguous hex ID prefix, or a
-session name.
+session name, and support shell tab completion (`hewitt completion`). When
+`<session>` is omitted on an interactive terminal, they open an interactive
+session picker.
 
 The `workspace` package creates worktrees and offers a safe removal API. Removal
 checks the repository and exact checkout path, refuses modified, untracked, or

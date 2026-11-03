@@ -58,7 +58,11 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, id); err != nil {
+			reconnect := shortID(id)
+			if name != "" {
+				reconnect = name
+			}
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
 				return fmt.Errorf("report session %q (container preserved): %w", id, err)
 			}
 			store, err := session.NewStore(cfg.DataDir)
