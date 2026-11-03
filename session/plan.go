@@ -94,6 +94,13 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 			s.Isolation = "shared"
 		}
 	}
+	if s.Mode != "exec" && s.Image == "" {
+		adapter, err := agent.Lookup(s.Agent)
+		if err != nil {
+			return settings{}, err
+		}
+		s.Image = adapter.DefaultImage()
+	}
 	for _, spec := range s.Mounts {
 		m, err := parseMount(spec, s.Dir, true)
 		if err != nil {

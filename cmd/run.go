@@ -27,11 +27,14 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
-		Example:   "  hewitt " + exampleAction + " codex --image hewitt/codex:local --profile personal",
+		Long:      short + ".\n\nClaude and Codex select their GHCR images automatically; OpenCode requires an explicit image (FROM applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
+		Example:   "  hewitt " + exampleAction + " codex --profile personal",
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("image") && image == "" {
+				return fmt.Errorf("image must be nonempty")
+			}
 			opts := session.AgentOptions{Image: image, Name: name, Profile: profile, DataDir: cfg.DataDir, Repository: repository}
 			if len(args) > 0 {
 				opts.Agent = args[0]
@@ -68,20 +71,17 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "optional Docker container name")
 	cmd.Flags().StringVar(&profile, "profile", "default", "persistent profile ID, scoped to the agent")
 	if action != "run" {
-		cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (required)")
-		if err := cmd.MarkFlagRequired("image"); err != nil {
-			panic(err)
-		}
+		cmd.Flags().StringVar(&image, "image", "", "override the default Claude/Codex image (required for OpenCode)")
 		return cmd
 	}
 	cmd.Args = cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs)
 	cmd.Use = "run [agent]"
-	cmd.Example = "  hewitt run codex --image hewitt/codex:local --profile personal\n" +
+	cmd.Example = "  hewitt run codex --profile personal\n" +
 		"  hewitt run                       # settings from ./Hewittfile\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
-	cmd.Long = short + ".\n\nFlags override the Hewittfile (Hewittfile in --repo, or --file); see README for its instructions.\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
-	cmd.Flags().StringVar(&image, "image", "", "image containing the selected native CLI (or FROM)")
+	cmd.Long = short + ".\n\nFlags override the Hewittfile (Hewittfile in --repo, or --file); see README for its instructions.\nClaude and Codex select their GHCR images automatically; OpenCode requires an explicit image (FROM applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
+	cmd.Flags().StringVar(&image, "image", "", "override the default Claude/Codex image or Hewittfile FROM")
 	cmd.Flags().StringVar(&repository, "repo", ".", "source directory or Git repository (default: current directory)")
 	cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the new worktree from")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "start without attaching; print the session ID")

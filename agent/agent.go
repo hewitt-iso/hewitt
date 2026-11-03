@@ -37,6 +37,8 @@ func (inv Invocation) Allow(keys ...string) Invocation {
 // Implementations do not read credentials or perform OAuth/refresh themselves.
 type Adapter interface {
 	Name() string
+	// DefaultImage is empty when the caller must select an image explicitly.
+	DefaultImage() string
 	Run() Invocation
 	Login() Invocation
 	Status() Invocation
@@ -69,6 +71,8 @@ func Lookup(name string) (Adapter, error) {
 // Claude uses the unmodified Claude Code binary and its own subscription login.
 type Claude struct{}
 
+func (Claude) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-claude:latest" }
+
 func (Claude) Name() string    { return "claude" }
 func (Claude) Run() Invocation { return claudeInvocation() }
 
@@ -100,6 +104,8 @@ func claudeInvocation(args ...string) Invocation {
 // Codex uses a dedicated native file store so login survives container recreation.
 type Codex struct{}
 
+func (Codex) DefaultImage() string { return "ghcr.io/hewitt-iso/hewitt-codex:latest" }
+
 func (Codex) Name() string       { return "codex" }
 func (Codex) Run() Invocation    { return codexInvocation() }
 func (Codex) Login() Invocation  { return codexInvocation("login", "--device-auth") }
@@ -130,6 +136,8 @@ func codexInvocation(args ...string) Invocation {
 // env file. Its credentials live in XDG_DATA_HOME/opencode/auth.json, which is
 // inside the profile.
 type OpenCode struct{}
+
+func (OpenCode) DefaultImage() string { return "" }
 
 func (OpenCode) Name() string       { return "opencode" }
 func (OpenCode) Run() Invocation    { return openCodeInvocation() }

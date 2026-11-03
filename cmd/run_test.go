@@ -180,13 +180,13 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 	}{
 		{args: []string{"run"}, want: "select an agent"},
 		{args: []string{"run", "codex", "extra"}, want: "accepts at most 1 arg(s)"},
-		{args: []string{"run", "codex"}, want: "select an image"},
-		{args: []string{"run", "codex", "--image", ""}, want: "select an image"},
+		{args: []string{"run", "codex"}, want: "locate repository"},
+		{args: []string{"run", "codex", "--image", ""}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image=--privileged"}, want: "image must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--name", "bad name"}, want: "container name must be nonempty"},
 		{args: []string{"run", "codex", "--image", "test", "--profile", "../escape"}, want: "profile must"},
 		{args: []string{"run", "gemini", "--image", "test"}, want: "no implemented adapter"},
-		{args: []string{"login", "codex"}, want: `required flag(s) "image"`},
+		{args: []string{"login", "codex"}, want: "ensure the Docker CLI is installed"},
 		{args: []string{"login", "claude", "--image", "test", "--profile", ""}, want: "profile must"},
 		{args: []string{"run", "codex", "--image", "test"}, want: "locate repository"},
 	} {
@@ -269,4 +269,71 @@ func runRepository(t *testing.T) {
 		}
 	}
 	t.Chdir(dir)
+}
+
+func TestAgentImageSelection(t *testing.T) {
+	for _, action := range []string{"run", "login"} {
+		for _, agent := range []string{"codex", "claude"} {
+			for _, override := range []string{"", "custom-agent:test"} {
+				t.Run(action+"/"+agent+"/"+override, func(t *testing.T) {
+					runRepository(t)
+					home := t.TempDir()
+					t.Setenv("HOME", home)
+					t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+					t.Setenv("PATH", home+string(os.PathListSeparator)+os.Getenv("PATH"))
+					calls := filepath.Join(home, "calls")
+					t.Setenv("HEWITT_TEST_CALLS", calls)
+					script := `#!/bin/sh
+if [ "$2" = create ]; then
+  printf '%s\n' "$@" > "$HEWITT_TEST_CALLS"
+  printf '%s\n' '` + containerID + `'
+fi
+if [ "$2" = inspect ]; then printf '%s\n' '{"Status":"exited","ExitCode":0}'; fi
+`
+					if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					args := []string{action, agent}
+					if action == "run" {
+						args = append(args, "--detach")
+					}
+					want := "ghcr.io/hewitt-iso/hewitt-" + agent + ":latest"
+					if override != "" {
+						args = append(args, "--image", override)
+						want = override
+					}
+					var out, diagnostics bytes.Buffer
+					root := NewRootCommand("test")
+					root.SetOut(&out)
+					root.SetErr(&diagnostics)
+					inputPath := filepath.Join(home, "input")
+					if err := os.WriteFile(inputPath, []byte("synthetic-test-token\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					input, err := os.Open(inputPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { input.Close() })
+					root.SetIn(input)
+					root.SetArgs(args)
+					if err := root.Execute(); err != nil {
+						t.Fatal(err)
+					}
+					got, err := os.ReadFile(calls)
+					if err != nil || !strings.Contains(string(got), "\n--\n"+want+"\n") {
+						t.Fatalf("Docker image: %q, %v; want %q", got, err, want)
+					}
+					store, err := session.NewStore(filepath.Join(home, ".hewitt"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					m, err := store.Get(containerID)
+					if err != nil || m.Image != want {
+						t.Fatalf("saved image = %q, %v; want %q", m.Image, err, want)
+					}
+				})
+			}
+		}
+	}
 }

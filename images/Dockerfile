@@ -1,6 +1,7 @@
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS base
+LABEL org.opencontainers.image.source="https://github.com/hewitt-iso/hewitt"
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git ripgrep procps tmux \
+    ca-certificates curl git ripgrep procps tmux ncurses-term \
     && rm -rf /var/lib/apt/lists/*
 ENV HOME=/tmp TERM=xterm-256color
 WORKDIR /tmp
@@ -14,12 +15,14 @@ RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
     && claude --version
 
 FROM base AS claude
+LABEL org.opencontainers.image.description="Hewitt agent environment for Claude Code"
 COPY --from=claude-install /usr/local/bin/claude /usr/local/bin/claude
 ENV DISABLE_AUTOUPDATER=1
 USER 1000:1000
 CMD ["claude"]
 
 FROM base AS codex
+LABEL org.opencontainers.image.description="Hewitt agent environment for OpenAI Codex"
 ARG CODEX_VERSION=0.153.4
 RUN npm install --global "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force \
