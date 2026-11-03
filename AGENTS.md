@@ -25,7 +25,10 @@ do not make separate API credits a prerequisite.
   packages or speculative interfaces.
 - `workspace`: Git worktree creation on unique branches and safe removal that
   refuses uncommitted, untracked, or ignored files and retains branches.
-- `agent`: native Claude Code and Codex run/login descriptions, independent of Cobra.
+- `agent`: native Claude Code and Codex run/login descriptions and default image
+  tags, independent of Cobra.
+- `images`: shared Docker build stages with agent targets and the egress proxy.
+  Keep default GHCR tags aligned with the Makefile; images contain no login state.
 - `profile`: private agent-scoped directories for native client state; credentials
   are managed by the native clients.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace

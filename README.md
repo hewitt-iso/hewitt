@@ -56,19 +56,56 @@ The default version is `dev`. Without Make, use `go build -o bin/hewitt .` or
 
 ## Create and start a session
 
-Supply an image containing `tmux` (3.3 or newer), `env`, and the selected native
-CLI on PATH. The image must support the host user's UID/GID and include its
-terminal definitions. Hewitt does not ship agent images yet.
+`run` and `login` automatically select these images:
+
+- `ghcr.io/hewitt-iso/hewitt-codex:latest`
+- `ghcr.io/hewitt-iso/hewitt-claude:latest`
+
+Docker pulls a missing image on first use. Once cached, Docker uses the local
+copy; use `docker pull IMAGE` to update it. Published images must be public for
+users to pull them without a registry login.
+
+To build locally instead (requires Docker and network access):
 
 ```sh
-./bin/hewitt login codex --image my-codex:local --profile personal
-./bin/hewitt run codex --image my-codex:local --profile personal --repo /path/to/repo
+make images  # also builds the existing OpenCode and egress images
+# Or build only one:
+make image-codex
+make image-claude
+```
+
+Each build tags the image with both its default GHCR reference and a local
+alias (`hewitt-codex:local` or `hewitt-claude:local`). Hewitt uses the locally
+built GHCR tag without downloading it. To select specific client releases:
+
+```sh
+make image-codex CODEX_VERSION=<version>
+make image-claude CLAUDE_VERSION=<version>
+```
+
+Local builds default to Codex `latest` and Claude Code `stable`. The images use
+Node.js 24 on Debian Bookworm and include Git, Bash, ripgrep, tmux 3.3, `env`,
+CA certificates, and terminal definitions. The Dockerfile supports Linux amd64
+and arm64 builds and execution as the host UID/GID. Each build produces the
+builder's native architecture; the initial publishing workflow builds amd64
+images. Apple Silicon users can build locally
+for native arm64 execution or use Docker's amd64 emulation.
+Codex is installed from the official [`@openai/codex` package](https://github.com/openai/codex);
+Claude Code uses its official [native installer](https://code.claude.com/docs/en/setup).
+Claude auto-updates are disabled; updates go through image rebuilds. No login
+state is included in either image. The build context is limited to `images/`.
+
+Log in and run:
+
+```sh
+./bin/hewitt login codex --profile personal
+./bin/hewitt run codex --profile personal --repo /path/to/repo
 # Detach with Ctrl-B then D, then reconnect:
 ./bin/hewitt ps
 ./bin/hewitt attach <full-session-id>
 
 # Start without connecting a terminal:
-./bin/hewitt run claude --image my-claude:local --profile personal --detach
+./bin/hewitt run claude --profile personal --detach
 ```
 
 `run` uses the current directory's repository by default. Use `--repo PATH`
@@ -79,8 +116,10 @@ Uncommitted source changes are left alone and are not copied into the worktree.
 Linked source worktrees are supported; the shared Git directory is resolved.
 No existing branch is reset or reused. Login does not create a worktree.
 
-`--image` is required; `--name` optionally names the Docker container. Implemented
-adapters are `claude` and `codex`. Other agents fail explicitly. `--profile`
+`--image` overrides the Claude/Codex default; OpenCode still requires an image.
+Hewittfile `FROM` takes precedence over the default for run sessions.
+`--name` optionally names the Docker container. Implemented
+adapters are `claude`, `codex`, and `opencode`. Other agents fail explicitly. `--profile`
 defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
@@ -131,6 +170,58 @@ docker logs <container-id>
 docker stop <container-id>
 docker rm <container-id>      # Remove after stopping and inspecting
 ```
+
+## Publish agent images
+
+Maintainers can publish tested local builds to GHCR:
+
+```sh
+docker login ghcr.io -u YOUR_GITHUB_USERNAME
+make images
+# Run the image smoke and integration checks before publishing.
+make push-images
+```
+
+Use a GitHub personal access token (classic) with `write:packages` as the login
+password. Never put tokens in configuration, Dockerfiles, or source control.
+`IMAGE_REGISTRY` defaults to `ghcr.io/hewitt-iso`; `IMAGE_TAG` defaults to
+`latest`. Override them when building and pushing to another destination.
+
+The **Publish agent images** GitHub Actions workflow runs every six hours
+(at 00:17, 06:17, 12:17, and 18:17 UTC) and can also be started manually.
+Scheduled runs install Codex's npm `latest` version and Claude Code's `latest`
+release channel. Manual runs can select exact versions or Claude's `stable`
+channel. Builds pull the pinned base image and disable Docker's build cache so
+upstream client and OS package updates are actually downloaded.
+
+Each run rebuilds both images, checks the CLI under an arbitrary UID/GID,
+tests the container and tmux lifecycle, and publishes the tested image as
+`:latest` using the workflow's `GITHUB_TOKEN`. Failed checks prevent publishing
+that image, leaving the previously published tag available. Runs are serialized
+to avoid overlapping uploads. Images are rebuilt even if client versions have
+not changed, also refreshing base-image packages.
+
+This automation becomes active after the workflow and its supporting files
+reach the repository's default branch. GitHub schedules can be delayed; these
+are periodic rebuilds rather than instant upstream-release notifications.
+For the existing packages, grant this repository Actions write access in each
+package's settings if it was not inherited through the source repository link.
+
+Publishing an update does not change running containers. Users should pull the
+updated image and start a new Hewitt session; existing sessions keep their
+original containers:
+
+```sh
+docker pull ghcr.io/hewitt-iso/hewitt-codex:latest
+docker pull ghcr.io/hewitt-iso/hewitt-claude:latest
+```
+
+For a fresh local rebuild, use
+`make images IMAGE_BUILD_FLAGS="--pull --no-cache"`.
+
+The OCI source label links images to this repository. New GHCR packages start
+private; maintainers must set their visibility to public in GitHub package
+settings after the first push to enable anonymous pulls.
 
 ## List sessions
 
@@ -346,8 +437,9 @@ return a "not implemented yet" error and exit with status 1.
 | `hewitt logs <session>` | Read session output |
 | `hewitt diff <session>` | Inspect worktree changes |
 
-`run` and `login` require exactly one agent name and `--image`. `run --detach`
-starts without attaching.
+`run` and `login` select Claude/Codex images automatically. OpenCode requires
+an explicit image (`--image`, or `FROM` for run sessions). `run --detach` starts
+without attaching.
 `ps` accepts no positional arguments. All other commands require exactly one
 nonempty session identifier. `attach` validates the full ID and saved record;
 identifier format and existence checks for the remaining commands will be added

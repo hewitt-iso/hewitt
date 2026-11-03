@@ -8,6 +8,36 @@ permissions:
   contents: read
 
 jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [codex, claude]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build agent image
+        run: make image-${{ matrix.agent }}
+      - name: Smoke test as an arbitrary UID and GID
+        env:
+          AGENT: ${{ matrix.agent }}
+        run: |
+          docker run --rm --user 12345:12345 --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --env HOME=/tmp --env AGENT="$AGENT" \
+            --entrypoint sh "hewitt-$AGENT:local" -ec \
+            'env --version; git --version; tmux -V; infocmp xterm-256color; "$AGENT" --version'
+      - name: Test container and persistent terminal lifecycle
+        env:
+          HEWITT_TEST_IMAGE: hewitt-${{ matrix.agent }}:local
+        run: go test -tags=integration ./docker -run 'TestContainerLifecycle|TestPersistentTerminal' -v
+
   check:
     strategy:
       fail-fast: false

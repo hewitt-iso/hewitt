@@ -1,0 +1,68 @@
+name: Publish agent images
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      codex_version:
+        description: Codex npm version
+        default: latest
+        required: true
+      claude_version:
+        description: Claude Code native version or channel
+        default: latest
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-agent-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [codex, claude]
+    env:
+      IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+      CODEX_VERSION: ${{ inputs.codex_version || 'latest' }}
+      CLAUDE_VERSION: ${{ inputs.claude_version || 'latest' }}
+      IMAGE_BUILD_FLAGS: --pull --no-cache
+      AGENT: ${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build image
+        run: make "image-$AGENT"
+      - name: Smoke test as an arbitrary UID and GID
+        run: |
+          docker run --rm --user 12345:12345 --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --env HOME=/tmp --env AGENT="$AGENT" \
+            --entrypoint sh "hewitt-$AGENT:local" -ec \
+            'git --version; tmux -V; infocmp xterm-256color; "$AGENT" --version'
+      - name: Test container and terminal lifecycle
+        env:
+          HEWITT_TEST_IMAGE: hewitt-${{ matrix.agent }}:local
+        run: go test -tags=integration ./docker -run 'TestContainerLifecycle|TestPersistentTerminal' -count=1 -v
+      - name: Log in to GHCR
+        # Publishing runs only after both CLI and lifecycle checks succeed.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - name: Publish tested image
+        run: make "push-$AGENT"

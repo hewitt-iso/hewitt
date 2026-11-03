@@ -280,6 +280,9 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
+	if opts.Image == "" {
+		opts.Image = adapter.DefaultImage()
+	}
 	inv := adapter.Run()
 	switch operation {
 	case "login":
