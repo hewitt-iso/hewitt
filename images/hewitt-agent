@@ -5,8 +5,17 @@ TOOLS_DIR="${HEWITT_TOOLS_DIR:-/hewitt/tools}"
 BIN_DIR="$TOOLS_DIR/bin"
 export PATH="$BIN_DIR:$PATH"
 
+# agent_binary maps an agent name to its executable.
+agent_binary() {
+	case "$1" in
+	antigravity) printf 'agy\n' ;;
+	*) printf '%s\n' "$1" ;;
+	esac
+}
+
 ensure_agent() {
-	local agent="$1"
+	local agent
+	agent="$(agent_binary "$1")"
 	mkdir -p "$BIN_DIR"
 	if [ -x "$BIN_DIR/$agent" ]; then
 		return 0
@@ -29,18 +38,76 @@ ensure_agent() {
 	codex)
 		local version="${CODEX_VERSION:-latest}"
 		npm install --prefix "$TOOLS_DIR/codex" "@openai/codex@$version"
-		ln -sf "$TOOLS_DIR/codex/bin/codex" "$BIN_DIR/codex"
+		ln -sf "$TOOLS_DIR/codex/node_modules/.bin/codex" "$BIN_DIR/codex"
 		;;
 	opencode)
 		local version="${OPENCODE_VERSION:-latest}"
 		npm install --prefix "$TOOLS_DIR/opencode" "opencode-ai@$version"
-		ln -sf "$TOOLS_DIR/opencode/bin/opencode" "$BIN_DIR/opencode"
+		ln -sf "$TOOLS_DIR/opencode/node_modules/.bin/opencode" "$BIN_DIR/opencode"
+		;;
+	pi)
+		local version="${PI_VERSION:-latest}"
+		npm install --prefix "$TOOLS_DIR/pi" --ignore-scripts "@earendil-works/pi-coding-agent@$version"
+		ln -sf "$TOOLS_DIR/pi/node_modules/.bin/pi" "$BIN_DIR/pi"
+		;;
+	agy)
+		local tmp
+		tmp="$(mktemp -d)"
+		curl -fsSL https://antigravity.google/cli/install.sh -o "$tmp/install-agy.sh"
+		HOME="$tmp" bash "$tmp/install-agy.sh" --dir "$BIN_DIR"
+		rm -rf "$tmp"
 		;;
 	*)
 		printf 'Unsupported agent: %s\n' "$agent" >&2
 		return 1
 		;;
 	esac
+}
+
+# launch execs an installed binary. agy stores its login in the Secret Service
+# keyring, so it runs in a private D-Bus session with gnome-keyring. The keyring
+# file lives in XDG_DATA_HOME, inside the private profile, which is what protects
+# it; the fixed password only lets the daemon create and unlock it without a
+# graphical prompt.
+launch() {
+	local binary="$1"
+	shift
+	if [ "$binary" != "agy" ]; then
+		exec "$binary" "$@"
+	fi
+	mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/keyrings"
+	exec dbus-run-session -- bash -c 'printf hewitt | gnome-keyring-daemon --replace --unlock --components=secrets >/dev/null 2>&1; exec agy "$@"' agy "$@"
+}
+
+# slash starts an agent in a private tmux server, types one of its slash
+# commands (such as /login) once the screen settles, and attaches to it, for
+# agents whose login exists only inside their interface.
+slash() {
+	local binary="$1" command="$2" socket="/tmp/hewitt-slash-$$.sock"
+	ensure_agent "$binary"
+	tmux -u -f /dev/null -S "$socket" new-session -d -s slash -x "$(tput cols 2>/dev/null || echo 120)" -y "$(tput lines 2>/dev/null || echo 40)" -- hewitt-agent "$binary"
+	# Wait until the screen has been unchanged for a second (startup finished).
+	local previous="" current i stable=0
+	for ((i = 0; i < 240 && stable < 2; i++)); do
+		sleep 0.5
+		current="$(tmux -S "$socket" capture-pane -p -t slash 2>/dev/null)" || exit 1
+		if [ -n "${current//[[:space:]]/}" ] && [ "$current" = "$previous" ]; then
+			stable=$((stable + 1))
+		else
+			stable=0
+		fi
+		previous="$current"
+	done
+	# Typing a command opens completion; the first Enter may only pick the
+	# completion, so press it again while the command is still in the editor.
+	tmux -S "$socket" send-keys -t slash -l "$command"
+	for ((i = 0; i < 3; i++)); do
+		sleep 0.5
+		tmux -S "$socket" send-keys -t slash Enter
+		sleep 1
+		tmux -S "$socket" capture-pane -p -t slash 2>/dev/null | grep -qx "[[:space:]]*$command[[:space:]]*" || break
+	done
+	exec env -u TMUX tmux -u -S "$socket" attach-session -t slash
 }
 
 create_worktree_if_needed() {
@@ -124,6 +191,13 @@ exec_agent() {
 			-u OPENCODE_CONFIG_CONTENT \
 			opencode "$@"
 		;;
+	pi)
+		export PI_CODING_AGENT_DIR="$profile_root/pi" PI_SKIP_VERSION_CHECK=1
+		launch pi "$@"
+		;;
+	antigravity)
+		launch agy "$@"
+		;;
 	*)
 		printf 'Unsupported agent: %s\n' "$agent" >&2
 		exit 1
@@ -194,6 +268,8 @@ pick_interactive() {
 		"claude    (new worktree)"
 		"codex     (new worktree)"
 		"opencode  (new worktree)"
+		"pi        (new worktree)"
+		"agy       (new worktree)"
 		"shell     ($dir_name)"
 	)
 	local selected=0
@@ -236,7 +312,7 @@ pick_interactive() {
 				draw_menu 1
 			fi
 			;;
-		[1-4])
+		[1-6])
 			selected=$((key - 1))
 			draw_menu 1
 			break
@@ -265,7 +341,9 @@ pick_interactive() {
 	0) printf 'claude\n' ;;
 	1) printf 'codex\n' ;;
 	2) printf 'opencode\n' ;;
-	3) printf 'shell\n' ;;
+	3) printf 'pi\n' ;;
+	4) printf 'antigravity\n' ;;
+	5) printf 'shell\n' ;;
 	esac
 }
 
@@ -291,7 +369,11 @@ ensure)
 	agent="$1"
 	shift
 	ensure_agent "$agent"
-	exec "$agent" "$@"
+	launch "$(agent_binary "$agent")" "$@"
+	;;
+slash)
+	shift
+	slash "$@"
 	;;
 run)
 	shift
@@ -322,6 +404,6 @@ run)
 *)
 	ensure_agent "$cmd"
 	shift
-	exec "$cmd" "$@"
+	launch "$(agent_binary "$cmd")" "$@"
 	;;
 esac

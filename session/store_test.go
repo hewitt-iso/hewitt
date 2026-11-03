@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hewitt-iso/hewitt/agent"
 )
 
 func testMetadata() Metadata {
@@ -333,6 +336,17 @@ func TestStoreResolve(t *testing.T) {
 	for _, ref := range []string{"missing", "deadbeef", strings.Repeat("c", 64)} {
 		if _, err := store.Resolve(ref); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Resolve(%q) = %v; want os.ErrNotExist", ref, err)
+		}
+	}
+}
+
+func TestStoreAcceptsEveryAdapter(t *testing.T) {
+	s := testStore(t)
+	for _, name := range append(slices.Clone(agent.Names), "workspace") {
+		m := testMetadata()
+		m.Agent = name
+		if err := s.Save(m); err != nil {
+			t.Fatalf("Save agent %q: %v", name, err)
 		}
 	}
 }

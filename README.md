@@ -26,7 +26,7 @@ and Docker environment settings; it does not start or manage the daemon.
 
 Claude Code and Codex use their
 official Claude/ChatGPT subscription authentication flows; separate API credits
-are not required. OpenCode is a planned adapter.
+are not required. OpenCode, Pi, and Antigravity use their own native logins.
 
 ## Build and run
 
@@ -75,7 +75,7 @@ make images  # builds hewitt:local and hewitt/egress:local
 make image-hewitt
 ```
 
-Agents (`claude`, `codex`, `opencode`) are installed on demand into `<data_dir>/tools`
+Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand into `<data_dir>/tools`
 (mounted at `/hewitt/tools`) the first time they are selected, so the base image
 stays small and installed CLIs persist across containers. Every new tmux window
 (`Ctrl-B, C`) prompts you to choose an agent (creating a fresh worktree for it)
@@ -107,7 +107,7 @@ No existing branch is reset or reused. Login does not create a worktree.
 `--image` overrides the default image; `image` in `hewitt.yml` takes precedence
 over the default for run sessions.
 `--name` optionally names the Docker container. Implemented
-adapters are `claude`, `codex`, and `opencode`. Other agents fail explicitly. `--profile`
+adapters are `claude`, `codex`, `opencode`, `pi`, and `antigravity`. Other agents fail explicitly. `--profile`
 defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
@@ -117,6 +117,22 @@ commit it. Login output is not recorded by Docker.
 Sessions may share a profile. Codex refreshes its own tokens in the shared
 `auth.json` and reloads it when another session has already refreshed; if two
 sessions refresh at the same moment, one may need `hewitt login codex` again.
+
+Pi (`@earendil-works/pi-coding-agent`) logs in only through its `/login`
+command, so `hewitt login pi` starts Pi and types `/login` for you; pick a
+provider and paste the code it shows. `hewitt auth status pi` lists the models
+of configured providers, and `hewitt auth logout pi` types `/logout`. Pi's
+state, including `auth.json` (0600), lives in the profile as
+`PI_CODING_AGENT_DIR`.
+
+Antigravity (`agy`) stores its login in the Secret Service keyring. Hewitt runs
+it inside a private D-Bus session with `gnome-keyring`, whose keyring file
+lives in the profile (`data/keyrings`), so the login persists across
+containers. `hewitt login antigravity` opens agy's sign-in menu; choose Google
+OAuth and paste the code. API keys are not supported by agy.
+
+Images set `LANG=C.UTF-8` and terminals attach with `tmux -u`, so non-ASCII
+input such as Cyrillic works.
 
 `run` saves metadata before startup, starts a foreground tmux server inside the
 container, and launches the native agent once in a detached tmux session. It
@@ -170,7 +186,7 @@ with `--file PATH`. Command-line flags override it. Unknown keys are errors.
 Relative paths resolve against the file's directory. Every key is optional.
 
 ```yaml
-agent: claude                    # claude | codex | opencode; omit for the agent picker
+agent: claude                    # claude | codex | opencode | pi | antigravity; omit for the agent picker
 image: ghcr.io/hewitt-iso/hewitt:latest
 profile: personal                # shared per agent; default "default"
 name: my-session                 # Docker container name

@@ -162,7 +162,7 @@ func (Client) AttachTerminalSocket(ctx context.Context, id, socket string, in io
 	if err := validateSocket(socket); err != nil {
 		return err
 	}
-	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--", id,
-		"tmux", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
+	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--env", "LANG=C.UTF-8", "--", id,
+		"tmux", "-u", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
 	return attach(ctx, id, in, out, stderr, args)
 }

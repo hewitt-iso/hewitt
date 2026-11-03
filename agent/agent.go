@@ -4,6 +4,7 @@ package agent
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // ProfilePath is the stable container-visible mount point for native client state.
@@ -57,6 +58,10 @@ type Adapter interface {
 	Hosts() []string
 }
 
+// Names lists the implemented adapters in display order. Callers that mount
+// profiles or build allowlists for every agent iterate over it.
+var Names = []string{"claude", "codex", "opencode", "pi", "antigravity"}
+
 // Lookup selects an implemented adapter. Unsupported clients fail explicitly.
 func Lookup(name string) (Adapter, error) {
 	switch name {
@@ -66,8 +71,12 @@ func Lookup(name string) (Adapter, error) {
 		return Codex{}, nil
 	case "opencode":
 		return OpenCode{}, nil
+	case "pi":
+		return Pi{}, nil
+	case "antigravity":
+		return Antigravity{}, nil
 	default:
-		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: claude, codex, opencode)", name)
+		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: %s)", name, strings.Join(Names, ", "))
 	}
 }
 
@@ -168,6 +177,69 @@ func openCodeInvocation(args ...string) Invocation {
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
 		"OPENROUTER_API_KEY", "XAI_API_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
 		"OPENCODE_DISABLE_DEFAULT_PLUGINS", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT",
+	})
+}
+
+// Pi (pi.dev) logs in only through its /login command; hewitt-agent slash
+// starts it and types the command. Credentials live in PI_CODING_AGENT_DIR,
+// inside the profile, as auth.json (0600).
+type Pi struct{}
+
+func (Pi) DefaultImage() string    { return DefaultImage }
+func (Pi) Name() string            { return "pi" }
+func (Pi) Run() Invocation         { return piInvocation("pi") }
+func (Pi) Login() Invocation       { return piInvocation("slash", "pi", "/login") }
+func (Pi) Status() Invocation      { return piInvocation("pi", "--list-models") }
+func (Pi) Logout() Invocation      { return piInvocation("slash", "pi", "/logout") }
+func (Pi) ConfigDir() string       { return ProfilePath + "/pi" }
+func (Pi) InstructionFile() string { return ProfilePath + "/pi/AGENTS.md" }
+func (Pi) TokenVariable() string   { return "" }
+func (Pi) Hosts() []string {
+	return []string{
+		"registry.npmjs.org", "github.com", "api.github.com", "objects.githubusercontent.com",
+		"api.anthropic.com", "claude.ai", "console.anthropic.com",
+		"api.openai.com", "auth.openai.com", "chatgpt.com",
+		"*.githubcopilot.com", "accounts.google.com", "oauth2.googleapis.com",
+		"www.googleapis.com", "cloudcode-pa.googleapis.com", "generativelanguage.googleapis.com",
+	}
+}
+
+func piInvocation(binary string, args ...string) Invocation {
+	return invocation(binary, args, []string{"PI_CODING_AGENT_DIR=" + ProfilePath + "/pi", "PI_SKIP_VERSION_CHECK=1"}, []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
+		"OPENROUTER_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
+		"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "PI_CODING_AGENT_SESSION_DIR",
+	})
+}
+
+// Antigravity runs Google's agy CLI. agy keeps its login in the Secret Service
+// keyring, so hewitt-agent starts a private D-Bus session with gnome-keyring
+// whose keyring file lives in the profile's XDG_DATA_HOME. Plain agy opens
+// its sign-in menu when the profile has no login.
+type Antigravity struct{}
+
+func (Antigravity) DefaultImage() string    { return DefaultImage }
+func (Antigravity) Name() string            { return "antigravity" }
+func (Antigravity) Run() Invocation         { return antigravityInvocation("agy") }
+func (Antigravity) Login() Invocation       { return antigravityInvocation("agy") }
+func (Antigravity) Status() Invocation      { return antigravityInvocation("agy", "models") }
+func (Antigravity) Logout() Invocation      { return antigravityInvocation("slash", "agy", "/logout") }
+func (Antigravity) ConfigDir() string       { return ProfilePath + "/home/.gemini" }
+func (Antigravity) InstructionFile() string { return ProfilePath + "/home/.gemini/GEMINI.md" }
+func (Antigravity) TokenVariable() string   { return "" }
+func (Antigravity) Hosts() []string {
+	return []string{
+		"accounts.google.com", "oauth2.googleapis.com", "www.googleapis.com",
+		"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com",
+		"generativelanguage.googleapis.com", "antigravity.google",
+		"antigravity-cli-auto-updater-974169037036.us-central1.run.app",
+	}
+}
+
+func antigravityInvocation(binary string, args ...string) Invocation {
+	return invocation(binary, args, nil, []string{
+		"GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+		"DBUS_SESSION_BUS_ADDRESS",
 	})
 }
 

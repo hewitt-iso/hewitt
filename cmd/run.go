@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 
+	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/profile"
 	"github.com/hewitt-iso/hewitt/session"
@@ -28,9 +30,9 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nClaude, Codex, OpenCodem select their GHCR images automatically; OpenCode requires an explicit image (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-D to detach; hewitt attach reconnects to the same terminal. Ctrl-C stops the agent.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
+		Long:      short + ".\n\nAll agents use ghcr.io/hewitt-iso/hewitt:latest by default (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-D to detach; hewitt attach reconnects to the same terminal. Ctrl-C stops the agent.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
 		Example:   "  hewitt " + exampleAction + " codex --profile personal",
-		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
+		ValidArgs: append(slices.Clone(agent.Names), "gemini", "copilot"),
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("image") && image == "" {
@@ -76,7 +78,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 		"  hewitt run codex --profile personal\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
-	cmd.Long = short + ".\n\nFlags override hewitt.yml (hewitt.yml in --repo, or --file); see README for its keys.\nSelects ghcr.io/hewitt-iso/hewitt:latest automatically (hewitt.yml image applies to run only) and installs agents on demand into <data_dir>/tools.\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
+	cmd.Long = short + ".\n\nFlags override hewitt.yml (hewitt.yml in --repo, or --file); see README for its keys.\nSelects ghcr.io/hewitt-iso/hewitt:latest automatically (hewitt.yml image applies to run only) and installs agents on demand into <data_dir>/tools.\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
 	cmd.Flags().StringVar(&image, "image", "", "override the default image or hewitt.yml image")
 	cmd.Flags().StringVar(&repository, "repo", ".", "source directory or Git repository (default: current directory)")
 	cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the new worktree from")
