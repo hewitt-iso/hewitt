@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const onboardedFile = ".onboarded"
@@ -40,13 +41,14 @@ func MarkOnboarded(dataDir string) error {
 }
 
 // DetectHostConfigs returns the names of host tool configurations (claude,
-// codex, opencode, tmux) found in homeDir.
+// codex, opencode, tmux, git, shell) found in homeDir. Top-level dotfile
+// symlinks in homeDir are followed so symlinked dotfiles are detected.
 func DetectHostConfigs(homeDir string) []string {
 	if !filepath.IsAbs(homeDir) {
 		return nil
 	}
 	var found []string
-	if hasAnyRegular(homeDir,
+	if hasAnyTarget(homeDir,
 		".claude/CLAUDE.md",
 		".claude/settings.json",
 		".claude/skills",
@@ -55,15 +57,16 @@ func DetectHostConfigs(homeDir string) []string {
 	) || hasMCPServers(filepath.Join(homeDir, ".claude.json")) {
 		found = append(found, "claude")
 	}
-	if hasAnyRegular(homeDir,
+	if hasAnyTarget(homeDir,
 		".codex/AGENTS.md",
 		".codex/instructions.md",
 		".codex/config.toml",
 		".codex/skills",
+		".codex/rules",
 	) {
 		found = append(found, "codex")
 	}
-	if hasAnyRegular(homeDir,
+	if hasAnyTarget(homeDir,
 		".config/opencode/opencode.json",
 		".config/opencode/opencode.jsonc",
 		".config/opencode/AGENTS.md",
@@ -74,15 +77,19 @@ func DetectHostConfigs(homeDir string) []string {
 	) {
 		found = append(found, "opencode")
 	}
-	if hasAnyRegular(homeDir, ".tmux.conf", ".config/tmux/tmux.conf") {
+	if hasAnyTarget(homeDir, ".tmux.conf", ".config/tmux/tmux.conf", ".config/tmux") {
 		found = append(found, "tmux")
+	}
+	if hasAnyTarget(homeDir, ".gitconfig", ".config/git/config") {
+		found = append(found, "git")
 	}
 	return found
 }
 
 // ImportHostConfigs copies non-credential host configurations (skills, MCP
-// servers, rules, commands, and tmux.conf) from homeDir into the private Hewitt
-// profiles under dataDir. Symlinks are ignored.
+// servers, rules, commands, tmux config, and gitconfig/bashrc) from homeDir
+// into the private Hewitt profiles under dataDir. Top-level dotfile symlinks
+// are resolved; symlinks inside walked subdirectories are skipped.
 func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 	if !filepath.IsAbs(homeDir) {
 		return nil, fmt.Errorf("home directory must be absolute")
@@ -106,7 +113,7 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 	for _, rel := range []string{"CLAUDE.md", "settings.json", "skills", "commands", "agents"} {
 		src := filepath.Join(homeDir, ".claude", rel)
 		dst := filepath.Join(dirs["claude"], "claude", rel)
-		copied, err := copySafe(src, dst)
+		copied, err := copySafe(src, dst, true)
 		if err != nil {
 			return nil, fmt.Errorf("import claude %s: %w", rel, err)
 		}
@@ -123,18 +130,23 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 		imported = append(imported, "claude")
 	}
 
-	// 2. Codex configs (rules, config.toml, skills).
+	// 2. Codex configs (rules, sanitized config.toml, skills).
 	codexImported := false
-	for _, rel := range []string{"AGENTS.md", "instructions.md", "config.toml", "skills"} {
+	for _, rel := range []string{"AGENTS.md", "instructions.md", "skills", "rules"} {
 		src := filepath.Join(homeDir, ".codex", rel)
 		dst := filepath.Join(dirs["codex"], "codex", rel)
-		copied, err := copySafe(src, dst)
+		copied, err := copySafe(src, dst, true)
 		if err != nil {
 			return nil, fmt.Errorf("import codex %s: %w", rel, err)
 		}
 		if copied {
 			codexImported = true
 		}
+	}
+	if copied, err := importCodexConfig(filepath.Join(homeDir, ".codex", "config.toml"), filepath.Join(dirs["codex"], "codex", "config.toml")); err != nil {
+		return nil, fmt.Errorf("import codex config.toml: %w", err)
+	} else if copied {
+		codexImported = true
 	}
 	if codexImported {
 		imported = append(imported, "codex")
@@ -145,7 +157,7 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 	for _, rel := range []string{"opencode.json", "opencode.jsonc", "AGENTS.md", "skill", "skills", "command", "agent"} {
 		src := filepath.Join(homeDir, ".config", "opencode", rel)
 		dst := filepath.Join(dirs["opencode"], "config", "opencode", rel)
-		copied, err := copySafe(src, dst)
+		copied, err := copySafe(src, dst, true)
 		if err != nil {
 			return nil, fmt.Errorf("import opencode %s: %w", rel, err)
 		}
@@ -157,19 +169,54 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 		imported = append(imported, "opencode")
 	}
 
-	// 4. tmux configuration.
+	// 4. tmux configuration (~/.tmux.conf and ~/.config/tmux/).
+	tmuxImported := false
 	tmuxSrc := filepath.Join(homeDir, ".tmux.conf")
-	if !isRegularFile(tmuxSrc) {
+	if !isTargetFile(tmuxSrc) {
 		tmuxSrc = filepath.Join(homeDir, ".config", "tmux", "tmux.conf")
 	}
-	if isRegularFile(tmuxSrc) {
+	if isTargetFile(tmuxSrc) {
 		for _, client := range []string{"claude", "codex", "opencode"} {
 			dst := filepath.Join(dirs[client], "home", ".tmux.conf")
-			if _, err := copySafe(tmuxSrc, dst); err != nil {
+			if copied, err := copySafe(tmuxSrc, dst, true); err != nil {
 				return nil, fmt.Errorf("import tmux config: %w", err)
+			} else if copied {
+				tmuxImported = true
 			}
 		}
+	}
+	tmuxConfigDir := filepath.Join(homeDir, ".config", "tmux")
+	if info, err := os.Stat(tmuxConfigDir); err == nil && info.IsDir() {
+		for _, client := range []string{"claude", "codex", "opencode"} {
+			dst := filepath.Join(dirs[client], "config", "tmux")
+			if copied, err := copySafe(tmuxConfigDir, dst, true); err != nil {
+				return nil, fmt.Errorf("import tmux config dir: %w", err)
+			} else if copied {
+				tmuxImported = true
+			}
+		}
+	}
+	if tmuxImported {
 		imported = append(imported, "tmux")
+	}
+
+	// 5. Git & shell defaults (~/.gitconfig, ~/.config/git/config, ~/.bashrc).
+	gitImported := false
+	for _, client := range []string{"claude", "codex", "opencode"} {
+		if copied, err := copySafe(filepath.Join(homeDir, ".gitconfig"), filepath.Join(dirs[client], "home", ".gitconfig"), true); err != nil {
+			return nil, fmt.Errorf("import .gitconfig: %w", err)
+		} else if copied {
+			gitImported = true
+		}
+		if copied, err := copySafe(filepath.Join(homeDir, ".config", "git"), filepath.Join(dirs[client], "config", "git"), true); err != nil {
+			return nil, fmt.Errorf("import git config dir: %w", err)
+		} else if copied {
+			gitImported = true
+		}
+		_, _ = copySafe(filepath.Join(homeDir, ".bashrc"), filepath.Join(dirs[client], "home", ".bashrc"), true)
+	}
+	if gitImported {
+		imported = append(imported, "git")
 	}
 
 	return imported, nil
@@ -182,13 +229,13 @@ func DetectHostCredentials(homeDir string) []string {
 		return nil
 	}
 	var found []string
-	if isRegularFile(filepath.Join(homeDir, ".claude", ".credentials.json")) {
+	if isTargetFile(filepath.Join(homeDir, ".claude", ".credentials.json")) {
 		found = append(found, "claude")
 	}
-	if isRegularFile(filepath.Join(homeDir, ".codex", "auth.json")) {
+	if isTargetFile(filepath.Join(homeDir, ".codex", "auth.json")) {
 		found = append(found, "codex")
 	}
-	if isRegularFile(filepath.Join(homeDir, ".local", "share", "opencode", "auth.json")) {
+	if isTargetFile(filepath.Join(homeDir, ".local", "share", "opencode", "auth.json")) {
 		found = append(found, "opencode")
 	}
 	return found
@@ -228,14 +275,14 @@ func ImportHostCredentials(dataDir, homeDir, profileID string) ([]string, error)
 	}
 	var imported []string
 	for _, spec := range specs {
-		if !isRegularFile(spec.src) {
+		if !isTargetFile(spec.src) {
 			continue
 		}
 		dir, err := Prepare(dataDir, spec.agent, profileID)
 		if err != nil {
 			return nil, err
 		}
-		copied, err := copySafe(spec.src, spec.dst(dir))
+		copied, err := copySafe(spec.src, spec.dst(dir), true)
 		if err != nil {
 			return nil, fmt.Errorf("import %s credentials: %w", spec.agent, err)
 		}
@@ -246,10 +293,10 @@ func ImportHostCredentials(dataDir, homeDir, profileID string) ([]string, error)
 	return imported, nil
 }
 
-func hasAnyRegular(base string, rels ...string) bool {
+func hasAnyTarget(base string, rels ...string) bool {
 	for _, rel := range rels {
-		info, err := os.Lstat(filepath.Join(base, rel))
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		info, err := os.Stat(filepath.Join(base, rel))
+		if err != nil {
 			continue
 		}
 		if info.Mode().IsRegular() || info.IsDir() {
@@ -259,13 +306,13 @@ func hasAnyRegular(base string, rels ...string) bool {
 	return false
 }
 
-func isRegularFile(path string) bool {
-	info, err := os.Lstat(path)
+func isTargetFile(path string) bool {
+	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
 }
 
 func hasMCPServers(path string) bool {
-	if !isRegularFile(path) {
+	if !isTargetFile(path) {
 		return false
 	}
 	data, err := os.ReadFile(path)
@@ -283,7 +330,7 @@ func hasMCPServers(path string) bool {
 // importClaudeMCP extracts only the mcpServers field from ~/.claude.json so
 // MCP server definitions are imported without copying account state.
 func importClaudeMCP(src, dst string) (bool, error) {
-	if !isRegularFile(src) {
+	if !isTargetFile(src) {
 		return false, nil
 	}
 	data, err := os.ReadFile(src)
@@ -311,9 +358,47 @@ func importClaudeMCP(src, dst string) (bool, error) {
 	return true, nil
 }
 
-// copySafe copies a regular file or directory tree from src to dst with
-// 0700 directory permissions and 0600 file permissions, skipping any symlinks.
-func copySafe(src, dst string) (bool, error) {
+// importCodexConfig copies ~/.codex/config.toml while stripping host-only
+// desktop app sections ([marketplaces.*], [plugins.*], [mcp_servers.node_repl*])
+// whose binaries/paths only exist in the host ChatGPT desktop app bundle.
+func importCodexConfig(src, dst string) (bool, error) {
+	if !isTargetFile(src) {
+		return false, nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false, err
+	}
+	var kept []string
+	skipSection := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			header := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+			skipSection = strings.HasPrefix(header, "marketplaces.") ||
+				strings.HasPrefix(header, "plugins.") ||
+				strings.HasPrefix(header, "mcp_servers.node_repl") ||
+				header == "desktop"
+		}
+		if !skipSection {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return false, err
+	}
+	out := strings.TrimSpace(strings.Join(kept, "\n")) + "\n"
+	if err := os.WriteFile(dst, []byte(out), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// copySafe copies a file or directory tree from src to dst with 0700 directory
+// permissions and 0600 file permissions. If allowRootSymlink is true, a
+// top-level dotfile symlink is resolved; symlinks inside directories are
+// always skipped.
+func copySafe(src, dst string, allowRootSymlink bool) (bool, error) {
 	info, err := os.Lstat(src)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -322,7 +407,18 @@ func copySafe(src, dst string) (bool, error) {
 		return false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return false, nil
+		if !allowRootSymlink {
+			return false, nil
+		}
+		resolved, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return false, nil
+		}
+		src = resolved
+		info, err = os.Lstat(src)
+		if err != nil {
+			return false, nil
+		}
 	}
 	if info.Mode().IsRegular() {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {

@@ -31,11 +31,25 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 	in := cmd.InOrStdin()
 	stderr := cmd.ErrOrStderr()
 
+	banner := fmt.Sprintf("\r\n"+
+		"%s╭──────────────────────────────────────────────────────────╮%s\r\n"+
+		"%s│%s  %s◆ Hewitt%s · %sFirst-Time Setup%s                             %s│%s\r\n"+
+		"%s│%s  %sIsolated Docker workspaces for AI coding agents%s         %s│%s\r\n"+
+		"%s╰──────────────────────────────────────────────────────────╯%s\r\n\r\n",
+		ansiCyan, ansiReset,
+		ansiCyan, ansiReset, ansiBoldCyan, ansiReset, ansiBold, ansiReset, ansiCyan, ansiReset,
+		ansiCyan, ansiReset, ansiDim, ansiReset, ansiCyan, ansiReset,
+		ansiCyan, ansiReset,
+	)
+	if _, err := fmt.Fprint(stderr, banner); err != nil {
+		return false, err
+	}
+
 	// Step 1: Import configs (skills, MCP, tmux, rules).
 	detectedConfigs := profile.DetectHostConfigs(homeDir)
 	importCfgLabel := "Yes — import host configs (skills, MCP, tmux, rules)"
 	if len(detectedConfigs) > 0 {
-		importCfgLabel += " [" + strings.Join(detectedConfigs, ", ") + "]"
+		importCfgLabel += fmt.Sprintf(" %s[%s]%s", ansiCyan, strings.Join(detectedConfigs, ", "), ansiReset)
 	}
 	step1, err := pickOption(in, stderr, "[1/3] Import configs (skills, MCP, tmux, rules)?", []string{
 		importCfgLabel,
@@ -50,25 +64,28 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 			return false, err
 		}
 		if len(imported) > 0 {
-			if _, err := fmt.Fprintf(stderr, "Imported configs: %s\r\n", strings.Join(imported, ", ")); err != nil {
+			if _, err := fmt.Fprintf(stderr, "  %s└─%s %sImported configs: %s%s\r\n\r\n", ansiDim, ansiReset, ansiCyan, strings.Join(imported, ", "), ansiReset); err != nil {
 				return false, err
 			}
 		} else {
-			if _, err := fmt.Fprintln(stderr, "No host configs found to import.\r"); err != nil {
+			if _, err := fmt.Fprintf(stderr, "  %s└─ No host configs found to import.%s\r\n\r\n", ansiDim, ansiReset); err != nil {
 				return false, err
 			}
 		}
+	} else {
+		_, _ = fmt.Fprint(stderr, "\r\n")
 	}
 
 	// Step 2: Create new workspace?
 	step2, err := pickOption(in, stderr, "[2/3] Create new workspace?", []string{
-		"Yes — Git worktree (isolated branch, recommended)",
-		"Yes — Copy workspace (isolated directory copy)",
+		"Yes — Git worktree " + ansiDim + "(isolated branch, recommended)" + ansiReset,
+		"Yes — Copy workspace " + ansiDim + "(isolated directory copy)" + ansiReset,
 		"No — finish onboarding without starting a workspace",
 	}, "onboarding cancelled", "write onboarding prompt")
 	if err != nil {
 		return false, err
 	}
+	_, _ = fmt.Fprint(stderr, "\r\n")
 	startWorkspace := step2 != 2
 	if opts.Workspace == "" {
 		switch step2 {
@@ -83,11 +100,11 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 	detectedCreds := profile.DetectHostCredentials(homeDir)
 	shareCredLabel := "Yes — copy host credentials into Hewitt profile"
 	if len(detectedCreds) > 0 {
-		shareCredLabel += " [" + strings.Join(detectedCreds, ", ") + "]"
+		shareCredLabel += fmt.Sprintf(" %s[%s]%s", ansiCyan, strings.Join(detectedCreds, ", "), ansiReset)
 	}
 	step3, err := pickOption(in, stderr, "[3/3] Share credentials?", []string{
 		shareCredLabel,
-		"Log in interactively now (hewitt login)",
+		"Log in interactively now " + ansiDim + "(hewitt login)" + ansiReset,
 		"Skip — configure credentials later",
 	}, "onboarding cancelled", "write onboarding prompt")
 	if err != nil {
@@ -100,20 +117,22 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 			return false, err
 		}
 		if len(imported) > 0 {
-			if _, err := fmt.Fprintf(stderr, "Shared credentials: %s\r\n", strings.Join(imported, ", ")); err != nil {
+			if _, err := fmt.Fprintf(stderr, "  %s└─%s %sShared credentials: %s%s\r\n\r\n", ansiDim, ansiReset, ansiCyan, strings.Join(imported, ", "), ansiReset); err != nil {
 				return false, err
 			}
 		} else {
-			if _, err := fmt.Fprintln(stderr, "No host credentials found to copy.\r"); err != nil {
+			if _, err := fmt.Fprintf(stderr, "  %s└─ No host credentials found to copy.%s\r\n\r\n", ansiDim, ansiReset); err != nil {
 				return false, err
 			}
 		}
 	case 1:
+		_, _ = fmt.Fprint(stderr, "\r\n")
 		agents := []string{"claude", "codex", "opencode"}
 		agentIdx, err := pickOption(in, stderr, "Select agent to log in", agents, "onboarding cancelled", "write onboarding prompt")
 		if err != nil {
 			return false, err
 		}
+		_, _ = fmt.Fprint(stderr, "\r\n")
 		loginOpts := session.AgentOptions{
 			Agent:   agents[agentIdx],
 			Image:   opts.Image,
@@ -123,6 +142,8 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 		if err := session.Authenticate(cmd.Context(), loginOpts, "login", in, cmd.OutOrStdout(), stderr); err != nil {
 			return false, err
 		}
+	default:
+		_, _ = fmt.Fprint(stderr, "\r\n")
 	}
 
 	if err := profile.MarkOnboarded(cfg.DataDir); err != nil {

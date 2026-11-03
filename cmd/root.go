@@ -39,7 +39,8 @@ func NewRootCommand(version string) *cobra.Command {
 					return err
 				}
 				if !start {
-					_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Onboarding complete. Run 'hewitt run' to start a workspace.")
+					_, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s✔%s %sOnboarding complete.%s Run %shewitt run%s to start a workspace.\n",
+						ansiBoldGreen, ansiReset, ansiBold, ansiReset, ansiBoldCyan, ansiReset)
 					return err
 				}
 				return executeRun(cmd, &cfg, opts, false)

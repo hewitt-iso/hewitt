@@ -55,14 +55,27 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 	mustWrite(".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"secret-claude"}}`)
 	mustWrite(".claude.json", `{"oauthAccount":"do-not-copy","mcpServers":{"fs":{"command":"npx"}}}`)
 	mustWrite(".codex/AGENTS.md", "# Codex rules\n")
-	mustWrite(".codex/config.toml", "model = \"gpt-5\"\n")
+	mustWrite(".codex/rules/default.rules", "rule1\n")
+	mustWrite(".codex/config.toml", "model = \"gpt-5\"\n\n[marketplaces.openai-bundled]\nsource = \"/host/only\"\n\n[tui]\ntheme = \"dark\"\n")
 	mustWrite(".codex/auth.json", `{"tokens":{"access_token":"secret-codex"}}`)
 	mustWrite(".config/opencode/opencode.json", `{"theme":"dark"}`)
 	mustWrite(".config/opencode/skill/test/SKILL.md", "opencode skill\n")
 	mustWrite(".local/share/opencode/auth.json", `{"github-copilot":{"access":"secret-opencode"}}`)
-	mustWrite(".tmux.conf", "set -g mouse on\n")
+	mustWrite(".gitconfig", "[user]\n\tname = Test\n")
 
-	// Add a symlink inside .claude/skills to ensure symlinks are skipped safely.
+	// Symlink ~/.config/tmux/tmux.conf -> dotfiles/tmux.conf (top-level dotfile symlink must be followed).
+	dotfilesTmux := filepath.Join(t.TempDir(), "tmux.conf")
+	if err := os.WriteFile(dotfilesTmux, []byte("set -g mouse on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config", "tmux"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfilesTmux, filepath.Join(home, ".config", "tmux", "tmux.conf")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a symlink inside .claude/skills to ensure symlinks inside walked dirs are skipped safely.
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
@@ -71,7 +84,7 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := DetectHostConfigs(home), []string{"claude", "codex", "opencode", "tmux"}; !reflect.DeepEqual(got, want) {
+	if got, want := DetectHostConfigs(home), []string{"claude", "codex", "opencode", "tmux", "git"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("DetectHostConfigs = %v, want %v", got, want)
 	}
 	if got, want := DetectHostCredentials(home), []string{"claude", "codex", "opencode"}; !reflect.DeepEqual(got, want) {
@@ -82,7 +95,7 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"claude", "codex", "opencode", "tmux"}; !reflect.DeepEqual(importedCfg, want) {
+	if want := []string{"claude", "codex", "opencode", "tmux", "git"}; !reflect.DeepEqual(importedCfg, want) {
 		t.Fatalf("ImportHostConfigs = %v, want %v", importedCfg, want)
 	}
 
@@ -105,7 +118,9 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 		filepath.Join(claudeProfile, "claude", "CLAUDE.md"),
 		filepath.Join(claudeProfile, "claude", "skills", "my-skill", "SKILL.md"),
 		filepath.Join(claudeProfile, "home", ".tmux.conf"),
+		filepath.Join(claudeProfile, "home", ".gitconfig"),
 		filepath.Join(dataDir, "profiles", "codex", "default", "codex", "AGENTS.md"),
+		filepath.Join(dataDir, "profiles", "codex", "default", "codex", "rules", "default.rules"),
 		filepath.Join(dataDir, "profiles", "codex", "default", "codex", "config.toml"),
 		filepath.Join(dataDir, "profiles", "opencode", "default", "config", "opencode", "opencode.json"),
 		filepath.Join(dataDir, "profiles", "opencode", "default", "config", "opencode", "skill", "test", "SKILL.md"),
@@ -117,6 +132,13 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Errorf("%s perm = %o, want 0600", check, info.Mode().Perm())
 		}
+	}
+	codexCfg, err := os.ReadFile(filepath.Join(dataDir, "profiles", "codex", "default", "codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(codexCfg), "marketplaces") || !strings.Contains(string(codexCfg), `theme = "dark"`) {
+		t.Fatalf("codex config.toml not sanitized: %s", codexCfg)
 	}
 
 	// Now import credentials and verify 0600 permissions.

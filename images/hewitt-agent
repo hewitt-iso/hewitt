@@ -14,7 +14,7 @@ ensure_agent() {
 	if command -v "$agent" >/dev/null 2>&1; then
 		return 0
 	fi
-	printf 'Installing %s into %s...\n' "$agent" "$TOOLS_DIR" >&2
+	printf '\r\n\033[1;36m◆\033[0m \033[1mInstalling %s\033[0m \033[2minto %s...\033[0m\r\n' "$agent" "$TOOLS_DIR" >&2
 	case "$agent" in
 	claude)
 		local version="${CLAUDE_VERSION:-stable}"
@@ -41,6 +41,7 @@ ensure_agent() {
 		return 1
 		;;
 	esac
+	printf '\033[1;32m✔\033[0m \033[1m%s ready\033[0m\r\n\r\n' "$agent" >&2
 }
 
 create_worktree_if_needed() {
@@ -114,7 +115,7 @@ exec_agent() {
 			-u OPENAI_BASE_URL \
 			-u OPENAI_IDENTITY_TOKEN_FILE \
 			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
-			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' "$@"
+			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "$@"
 		;;
 	opencode)
 		export OPENCODE_DISABLE_AUTOUPDATE=1
@@ -132,18 +133,35 @@ exec_agent() {
 }
 
 exec_shell() {
-	local dir_name project_root rcfile
+	local dir_name project_root rcfile profile_home
 	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
 	project_root="$(realpath "$PWD")"
+	profile_home="${HEWITT_PROFILES_DIR:-/hewitt/profiles}/claude/home"
+	if [ ! -d "$profile_home" ] && [ -d "/hewitt/profile/home" ]; then
+		profile_home="/hewitt/profile/home"
+	fi
 	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
 		tmux rename-window "shell:$dir_name" 2>/dev/null || true
 	fi
 	rcfile="$(mktemp /tmp/hewitt-bashrc.XXXXXX)"
 	cat >"$rcfile" <<EOF
 rm -f "$rcfile"
+if [ -f /etc/bash.bashrc ]; then
+	. /etc/bash.bashrc
+fi
+if [ -f "$profile_home/.bashrc" ]; then
+	. "$profile_home/.bashrc"
+fi
+if [ -f "$profile_home/.gitconfig" ]; then
+	export GIT_CONFIG_GLOBAL="$profile_home/.gitconfig"
+fi
 export HEWITT_PROJECT_ROOT="$project_root"
 export HEWITT_PROJECT_NAME="$dir_name"
 export HOME="\$HEWITT_PROJECT_ROOT"
+
+alias ls='ls --color=auto'
+alias ll='ls -alF --color=auto'
+alias grep='grep --color=auto'
 
 _hewitt_rel_pwd() {
 	if [ "\$PWD" = "\$HEWITT_PROJECT_ROOT" ]; then
@@ -152,6 +170,14 @@ _hewitt_rel_pwd() {
 		printf '%s/%s' "\$HEWITT_PROJECT_NAME" "\${PWD#"\$HEWITT_PROJECT_ROOT/"}"
 	else
 		printf '%s' "\$(basename "\$PWD")"
+	fi
+}
+
+_hewitt_git_branch() {
+	local br
+	br="\$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)" || return 0
+	if [ -n "\$br" ]; then
+		printf ' (\001\033[33m\002%s\001\033[0m\002)' "\$br"
 	fi
 }
 
@@ -182,7 +208,7 @@ popd() {
 	return 1
 }
 
-PS1='[\$(_hewitt_rel_pwd)] \$ '
+PS1='[\001\033[1;36m\002\$(_hewitt_rel_pwd)\001\033[0m\002]\$(_hewitt_git_branch) \$ '
 EOF
 	exec bash --rcfile "$rcfile" -i
 }
@@ -190,29 +216,30 @@ EOF
 pick_interactive() {
 	local dir_name
 	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
-	local options=(
-		"claude    (new worktree)"
-		"codex     (new worktree)"
-		"opencode  (new worktree)"
-		"shell     ($dir_name)"
-	)
+	local names=("claude" "codex" "opencode" "shell")
+	local descs=("Anthropic Claude Code · new worktree" "OpenAI Codex CLI · new worktree" "OpenCode CLI · new worktree" "Project Bash shell ($dir_name)")
 	local selected=0
-	local count=${#options[@]}
+	local count=${#names[@]}
+	local total_lines=$((count + 5))
 
 	draw_menu() {
 		local redraw="${1:-0}"
 		if [ "$redraw" = "1" ]; then
-			printf '\033[%dA\r\033[J' "$((count + 1))" >&2
+			printf '\033[%dA\r\033[J' "$total_lines" >&2
 		fi
-		printf 'Select agent or shell for %s (↑/↓ or j/k, Enter to select, q to close):\r\n' "$dir_name" >&2
+		printf '\033[36m╭──────────────────────────────────────────────────────────╮\033[0m\r\n' >&2
+		printf '\033[36m│\033[0m  \033[1;36m◆ Hewitt Workspace\033[0m · \033[1m%-34s\033[0m \033[36m│\033[0m\r\n' "$dir_name" >&2
+		printf '\033[36m╰──────────────────────────────────────────────────────────╯\033[0m\r\n' >&2
+		printf '\033[1;36m◆\033[0m \033[1mSelect agent or shell\033[0m\r\n' >&2
 		local i
 		for ((i = 0; i < count; i++)); do
-			local cursor=" "
 			if [ "$i" -eq "$selected" ]; then
-				cursor=">"
+				printf '  \033[1;36m❯ %d.\033[0m \033[1m%-10s\033[0m \033[36m%s\033[0m\r\n' "$((i + 1))" "${names[$i]}" "${descs[$i]}" >&2
+			else
+				printf '    \033[2m%d. %-10s %s\033[0m\r\n' "$((i + 1))" "${names[$i]}" "${descs[$i]}" >&2
 			fi
-			printf '%s %d) %s\r\n' "$cursor" "$((i + 1))" "${options[$i]}" >&2
 		done
+		printf '  \033[2m↑/↓ or j/k to navigate • 1-4 or enter to launch • q to close\033[0m\r\n' >&2
 	}
 
 	draw_menu 0
@@ -261,12 +288,10 @@ pick_interactive() {
 		esac
 	done
 
-	case "$selected" in
-	0) printf 'claude\n' ;;
-	1) printf 'codex\n' ;;
-	2) printf 'opencode\n' ;;
-	3) printf 'shell\n' ;;
-	esac
+	printf '\033[%dA\r\033[J' "$total_lines" >&2
+	printf '\033[1;32m✔\033[0m \033[1mSelected\033[0m \033[2m·\033[0m \033[1;36m%s\033[0m \033[2m(%s)\033[0m\r\n' "${names[$selected]}" "$dir_name" >&2
+
+	printf '%s\n' "${names[$selected]}"
 }
 
 load_tmux_conf() {
@@ -274,7 +299,11 @@ load_tmux_conf() {
 		return 0
 	fi
 	local conf
-	for conf in "${HEWITT_PROFILES_DIR:-/hewitt/profiles}/claude/home/.tmux.conf" "/hewitt/profile/home/.tmux.conf"; do
+	for conf in \
+		"${HEWITT_PROFILES_DIR:-/hewitt/profiles}/claude/home/.tmux.conf" \
+		"${HEWITT_PROFILES_DIR:-/hewitt/profiles}/claude/config/tmux/tmux.conf" \
+		"/hewitt/profile/home/.tmux.conf" \
+		"/hewitt/profile/config/tmux/tmux.conf"; do
 		if [ -f "$conf" ]; then
 			tmux source-file "$conf" 2>/dev/null || true
 			tmux bind-key -n C-c kill-window \; bind-key -n C-d detach-client \; set-option -g default-command hewitt-agent 2>/dev/null || true
