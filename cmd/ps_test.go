@@ -36,7 +36,7 @@ func TestPS(t *testing.T) {
 				args = append(args, "--config", path)
 			}
 			out, err := executeCommand(t, args...)
-			if err != nil || strings.Join(strings.Fields(out), " ") != "ID AGENT IMAGE NAME CREATED" || strings.Count(out, "\n") != 1 {
+			if err != nil || strings.Join(strings.Fields(out), " ") != "ID AGENT IMAGE NAME STATUS CREATED" || strings.Count(out, "\n") != 1 {
 				t.Fatalf("empty list = %q, %v", out, err)
 			}
 			if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
@@ -65,9 +65,9 @@ func TestPS(t *testing.T) {
 			}
 			lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 			want := []string{
-				"ID AGENT IMAGE NAME CREATED",
-				containerID + " codex my-codex:local - 2026-11-01T12:00:00Z",
-				second.ID + " claude my-claude:local hewitt-claude 2026-11-01T11:00:00Z",
+				"ID AGENT IMAGE NAME STATUS CREATED",
+				containerID + " codex my-codex:local - unknown 2026-11-01T12:00:00Z",
+				second.ID + " claude my-claude:local hewitt-claude unknown 2026-11-01T11:00:00Z",
 			}
 			for i := range lines {
 				lines[i] = strings.Join(strings.Fields(lines[i]), " ")
@@ -80,6 +80,43 @@ func TestPS(t *testing.T) {
 				if err != nil || got.ID != m.ID || got.Name != m.Name || !got.CreatedAt.Equal(m.CreatedAt) {
 					t.Fatalf("listing changed metadata: %+v, %v", got, err)
 				}
+			}
+			// When Docker is available, ps hides stopped sessions by default and
+			// shows them with -a / --all.
+			script := "#!/bin/sh\nif [ \"$6\" = \"" + containerID + "\" ]; then printf 'true\\n'; else printf 'false\\n'; fi\n"
+			if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out, err = executeCommand(t, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			wantRunningOnly := []string{
+				"ID AGENT IMAGE NAME STATUS CREATED",
+				containerID + " codex my-codex:local - running 2026-11-01T12:00:00Z",
+			}
+			for i := range lines {
+				lines[i] = strings.Join(strings.Fields(lines[i]), " ")
+			}
+			if !reflect.DeepEqual(lines, wantRunningOnly) {
+				t.Fatalf("list with Docker (default) = %q, want %q", lines, wantRunningOnly)
+			}
+			out, err = executeCommand(t, append(append([]string{}, args...), "-a")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			wantWithDockerAll := []string{
+				"ID AGENT IMAGE NAME STATUS CREATED",
+				containerID + " codex my-codex:local - running 2026-11-01T12:00:00Z",
+				second.ID + " claude my-claude:local hewitt-claude stopped 2026-11-01T11:00:00Z",
+			}
+			for i := range lines {
+				lines[i] = strings.Join(strings.Fields(lines[i]), " ")
+			}
+			if !reflect.DeepEqual(lines, wantWithDockerAll) {
+				t.Fatalf("list with Docker (-a) = %q, want %q", lines, wantWithDockerAll)
 			}
 			// A corrupt later record must fail without printing a partial list.
 			if err := os.WriteFile(filepath.Join(dataDir, "sessions", second.ID+".json"), []byte("{"), 0o600); err != nil {
@@ -107,7 +144,7 @@ func TestPSValidationAndHelp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"hewitt ps", "Examples:", "--config", "Docker is not required or queried"} {
+		for _, want := range []string{"hewitt ps", "Examples:", "--config", "Docker is not required"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("help = %q, want %q", out, want)
 			}

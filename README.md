@@ -8,9 +8,9 @@ their changes, and manage their environments from one CLI.
 **Status:** early development. `login` uses the native Claude Code or Codex
 subscription login flow with a dedicated persistent profile. `run` starts the
 native agent in a persistent tmux terminal inside Docker; `--detach` starts it in
-the background, and `attach` reconnects. `ps` lists saved sessions without Docker.
-Each run creates a Git worktree on its own branch. The remaining session
-commands are not implemented yet.
+the background, and `attach` reconnects. `ps` lists saved sessions and their
+status. `stop`, `rm`, and `diff` manage session lifecycles and workspace diffs.
+Each run creates a Git worktree on its own branch. `logs` is not implemented yet.
 
 ## Requirements
 
@@ -227,32 +227,36 @@ settings after the first push to enable anonymous pulls.
 
 ```sh
 ./bin/hewitt ps
+./bin/hewitt ps -a
 ./bin/hewitt ps --config /path/to/config.json
 ```
 
-`ps` lists all saved sessions from the configured `data_dir`, ordered by session
-ID. The table includes `ID` (the full container ID), `AGENT`, `IMAGE`, `NAME`
-(`-` when not supplied), and `CREATED` (a UTC RFC 3339 timestamp). An empty or
-missing store prints only the header and creates no files or directories.
-Invalid or unreadable records fail the command without printing a partial list.
+`ps` lists saved sessions from the configured `data_dir`, ordered by session
+ID. By default, stopped sessions are omitted; pass `-a` (`--all`) to include
+stopped sessions. The table includes `ID` (the full container ID), `AGENT`,
+`IMAGE`, `NAME` (`-` when not supplied), `STATUS` (`running`, `stopped`, or
+`unknown`), and `CREATED` (a UTC RFC 3339 timestamp). An empty or missing store
+prints only the header and creates no files or directories. Invalid or
+unreadable records fail the command without printing a partial list.
 
-Listing does not require or query Docker. Saved records describe creation intent,
-not live container status or agent readiness. Failed starts and containers removed
-outside Hewitt remain listed while their metadata exists. Containers whose
-metadata could not be saved do not appear.
+Listing does not require Docker; when Docker is unavailable or cannot be
+queried, `STATUS` is reported as `unknown` and all saved sessions are shown.
+Failed starts and containers removed outside Hewitt appear as `stopped` under
+`ps -a` while their metadata exists. Containers whose metadata could not be
+saved do not appear.
 
 ## Attach to a session
 
 ```sh
 ./bin/hewitt ps
-./bin/hewitt attach <full-session-id>
+./bin/hewitt attach <session>
 ```
 
-`attach` reads the saved record from the configured `data_dir` and connects to
-the existing tmux session using `docker container exec --interactive --tty`.
-Use the full ID printed by `run` or `ps`; names and abbreviated IDs are not
-accepted. Docker handles terminal mode and resizing; Hewitt restores terminal
-settings after cancellation. Attachment uses the `xterm-256color` terminal type.
+`attach` resolves the session from the configured `data_dir` by full ID,
+unambiguous hex ID prefix, or session name, and connects to the existing tmux
+session using `docker container exec --interactive --tty`. Docker handles
+terminal mode and resizing; Hewitt restores terminal settings after
+cancellation. Attachment uses the `xterm-256color` terminal type.
 
 Press **Ctrl-B, D** to detach and leave the agent running. Ctrl-C may interrupt
 the agent. Use tmux copy mode (**Ctrl-B, [**) to inspect scrollback. Each reconnect
@@ -328,8 +332,9 @@ intent, not live container status or agent readiness. They contain no credential
 agent prompts, or login state. Docker operations performed outside Hewitt do not
 update these records, and metadata written before a failed start remains present.
 
-The `session` package supports saving, reading, listing, and deleting metadata.
-It validates full container IDs, required fields, and format versions. Writes use
+The `session` package supports saving, reading, resolving, listing, and deleting
+metadata. It validates full container IDs, required fields, and format versions,
+and resolves unambiguous hex ID prefixes and session names. Writes use
 an atomic rename so readers see complete records; simultaneous writes to the same
 ID use the last completed replacement. New data and session directories have
 mode `0700`, and record files have mode `0600`; existing directory permissions are
@@ -338,9 +343,8 @@ left unchanged. Metadata access is confined beneath the data directory.
 Reading or listing a missing store creates no files. Listing returns records in
 ID order and reports malformed records instead of hiding them. Missing reads and
 deletions return errors. Deleting metadata only removes its JSON file, never a
-container or worktree. `ps` exposes metadata listing at the CLI. Metadata deletion
-is currently a Go package API; `rm` and the other session management commands
-remain unimplemented.
+container or worktree. `ps` exposes metadata listing and status at the CLI; `stop`
+and `rm` print the resolved full session ID to stdout.
 
 ## Development
 
@@ -425,25 +429,26 @@ packages, daemon, server, database, or cloud service are part of this foundation
 ## Session commands and planned MVP
 
 All commands are registered with help, examples, and argument validation. `run`
-implements container creation/startup, and `ps` lists saved sessions as described
-above; `attach` connects to a running container terminal. The remaining commands
-return a "not implemented yet" error and exit with status 1.
+implements container creation/startup, `ps` lists saved sessions and their
+status, `attach` connects to a running container terminal, `stop` stops a
+session's agent, `rm` safely removes a stopped session and its resources, and
+`diff` shows workspace changes. `logs` returns a "not implemented yet" error and
+exits with status 1.
 
-| Command | Planned capability |
+| Command | Capability |
 | --- | --- |
 | `hewitt run <agent>` | Run a native agent in a persistent terminal and a new Git worktree |
-| `hewitt stop <session>` | Stop a session |
-| `hewitt rm <session>` | Remove a session and safely clean up its resources |
-| `hewitt logs <session>` | Read session output |
-| `hewitt diff <session>` | Inspect worktree changes |
+| `hewitt stop <session>` | Stop a session and print its full ID |
+| `hewitt rm <session>` | Remove a stopped session, safely clean up its resources, and print its full ID |
+| `hewitt logs <session>` | Read session output (not implemented yet) |
+| `hewitt diff <session>` | Inspect worktree or copy changes |
 
 `run` and `login` select Claude/Codex images automatically. OpenCode requires
 an explicit image (`--image`, or `FROM` for run sessions). `run --detach` starts
 without attaching.
-`ps` accepts no positional arguments. All other commands require exactly one
-nonempty session identifier. `attach` validates the full ID and saved record;
-identifier format and existence checks for the remaining commands will be added
-with session management.
+`ps` accepts no positional arguments. Session commands (`attach`, `stop`, `rm`,
+`diff`) accept a full 64-character hex ID, an unambiguous hex ID prefix, or a
+session name.
 
 The `workspace` package creates worktrees and offers a safe removal API. Removal
 checks the repository and exact checkout path, refuses modified, untracked, or

@@ -23,7 +23,7 @@ func TestAttach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := session.Metadata{Terminal: "tmux", ID: containerID, Agent: "codex", Image: "codex:local", CreatedAt: time.Now().UTC()}
+	m := session.Metadata{Terminal: "tmux", ID: containerID, Agent: "codex", Image: "codex:local", Name: "my-session", CreatedAt: time.Now().UTC()}
 	if err := store.Save(m); err != nil {
 		t.Fatal(err)
 	}
@@ -44,17 +44,19 @@ func TestAttach(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var out, diagnostics bytes.Buffer
-	root := NewRootCommand("test")
-	root.SetIn(strings.NewReader("agent input\n"))
-	root.SetOut(&out)
-	root.SetErr(&diagnostics)
-	root.SetArgs([]string{"attach", containerID, "--config", configPath})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if out.String() != "agent input\n" || diagnostics.String() != "container stderr\n" {
-		t.Fatalf("streams = %q, %q", out.String(), diagnostics.String())
+	for _, ref := range []string{containerID, containerID[:12], "my-session"} {
+		var out, diagnostics bytes.Buffer
+		root := NewRootCommand("test")
+		root.SetIn(strings.NewReader("agent input\n"))
+		root.SetOut(&out)
+		root.SetErr(&diagnostics)
+		root.SetArgs([]string{"attach", ref, "--config", configPath})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != "agent input\n" || diagnostics.String() != "container stderr\n" {
+			t.Fatalf("streams = %q, %q", out.String(), diagnostics.String())
+		}
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(before, after) {
@@ -74,7 +76,7 @@ func TestAttachLookupAndHelp(t *testing.T) {
 		}
 	}
 	out, err := executeCommand(t, "attach", "--help", "--config", filepath.Join(home, "missing.json"))
-	if err != nil || !strings.Contains(out, "hewitt attach <full-session-id>") || strings.Contains(out, "not implemented") {
+	if err != nil || !strings.Contains(out, "hewitt attach <session>") || strings.Contains(out, "not implemented") {
 		t.Fatalf("help = %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hewitt")); !os.IsNotExist(err) {

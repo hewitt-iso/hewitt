@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hewitt-iso/hewitt/session"
 )
 
 func TestSessionCommands(t *testing.T) {
@@ -129,4 +132,42 @@ func executeCommand(t *testing.T, args ...string) (string, error) {
 		t.Errorf("command printed diagnostics instead of returning them: %q", stderr.String())
 	}
 	return stdout.String(), err
+}
+
+func TestStopAndRemoveWithShortIDAndName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("PATH", home)
+	script := `#!/bin/sh
+case "$2" in
+stop) exit 0 ;;
+inspect) printf 'false\n' ;;
+rm) exit 0 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.NewStore(filepath.Join(home, ".hewitt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{containerID[:12], "named-session"} {
+		m := session.Metadata{
+			ID: containerID, Agent: "codex", Image: "codex:local",
+			Name: "named-session", CreatedAt: time.Now().UTC(),
+		}
+		if err := store.Save(m); err != nil {
+			t.Fatal(err)
+		}
+		out, err := executeCommand(t, "stop", ref)
+		if err != nil || out != containerID+"\n" {
+			t.Fatalf("stop %q = %q, %v; want %s", ref, out, err, containerID)
+		}
+		out, err = executeCommand(t, "rm", ref)
+		if err != nil || out != containerID+"\n" {
+			t.Fatalf("rm %q = %q, %v; want %s", ref, out, err, containerID)
+		}
+	}
 }

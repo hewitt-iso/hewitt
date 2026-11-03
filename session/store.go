@@ -114,6 +114,50 @@ func (s *Store) Get(id string) (Metadata, error) {
 	return read(root, id)
 }
 
+// Resolve looks up a session by full 64-character hex ID, unambiguous hex ID
+// prefix, or exact session name. Missing records wrap os.ErrNotExist.
+func (s *Store) Resolve(ref string) (Metadata, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return Metadata{}, fmt.Errorf("session must not be empty")
+	}
+	if validateID(ref) == nil {
+		return s.Get(ref)
+	}
+	sessions, err := s.List()
+	if err != nil {
+		return Metadata{}, err
+	}
+	var nameMatches []Metadata
+	for _, m := range sessions {
+		if m.Name != "" && m.Name == ref {
+			nameMatches = append(nameMatches, m)
+		}
+	}
+	if len(nameMatches) == 1 {
+		return nameMatches[0], nil
+	}
+	if len(nameMatches) > 1 {
+		return Metadata{}, fmt.Errorf("session name %q is ambiguous (%s, %s); specify a longer ID prefix", ref, nameMatches[0].ID[:12], nameMatches[1].ID[:12])
+	}
+	if strings.Trim(ref, "0123456789abcdef") != "" || len(ref) > 64 {
+		return Metadata{}, fmt.Errorf("session %q: %w", ref, os.ErrNotExist)
+	}
+	var prefixMatches []Metadata
+	for _, m := range sessions {
+		if strings.HasPrefix(m.ID, ref) {
+			prefixMatches = append(prefixMatches, m)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return prefixMatches[0], nil
+	}
+	if len(prefixMatches) > 1 {
+		return Metadata{}, fmt.Errorf("session ID prefix %q is ambiguous (%s, %s); specify more characters", ref, prefixMatches[0].ID[:12], prefixMatches[1].ID[:12])
+	}
+	return Metadata{}, fmt.Errorf("session %q: %w", ref, os.ErrNotExist)
+}
+
 // List returns records in ID order. A missing store is empty. Invalid records
 // fail the whole operation rather than silently hiding sessions.
 func (s *Store) List() ([]Metadata, error) {

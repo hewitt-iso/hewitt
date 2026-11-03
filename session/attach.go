@@ -10,7 +10,7 @@ import (
 // Attach resolves saved metadata before connecting to its existing terminal. It does not
 // change metadata or start, stop, or remove the container.
 func Attach(ctx context.Context, store *Store, id string, stdin io.Reader, stdout, stderr io.Writer) error {
-	m, err := store.Get(id)
+	m, err := store.Resolve(id)
 	if err != nil {
 		return err
 	}

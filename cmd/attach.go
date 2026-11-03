@@ -10,7 +10,7 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:     "attach <session>",
 		Short:   "Attach to a session's container terminal",
-		Example: "  hewitt attach <full-session-id>",
+		Example: "  hewitt attach <session>",
 		Args:    sessionArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := session.NewStore(cfg.DataDir)
