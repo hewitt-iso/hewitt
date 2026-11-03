@@ -132,13 +132,59 @@ exec_agent() {
 }
 
 exec_shell() {
-	local dir_name
+	local dir_name project_root rcfile
 	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
+	project_root="$(realpath "$PWD")"
 	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
 		tmux rename-window "shell:$dir_name" 2>/dev/null || true
 	fi
-	export PS1="[$dir_name] \W \$ "
-	exec bash --norc -i
+	rcfile="$(mktemp /tmp/hewitt-bashrc.XXXXXX)"
+	cat >"$rcfile" <<EOF
+rm -f "$rcfile"
+export HEWITT_PROJECT_ROOT="$project_root"
+export HEWITT_PROJECT_NAME="$dir_name"
+export HOME="\$HEWITT_PROJECT_ROOT"
+
+_hewitt_rel_pwd() {
+	if [ "\$PWD" = "\$HEWITT_PROJECT_ROOT" ]; then
+		printf '%s' "\$HEWITT_PROJECT_NAME"
+	elif [[ "\$PWD" == "\$HEWITT_PROJECT_ROOT/"* ]]; then
+		printf '%s/%s' "\$HEWITT_PROJECT_NAME" "\${PWD#"\$HEWITT_PROJECT_ROOT/"}"
+	else
+		printf '%s' "\$(basename "\$PWD")"
+	fi
+}
+
+cd() {
+	local target="\${1:-\$HEWITT_PROJECT_ROOT}"
+	if [ "\$target" = "-" ]; then
+		target="\${OLDPWD:-\$HEWITT_PROJECT_ROOT}"
+	fi
+	local resolved
+	if ! resolved="\$(realpath -m -- "\$target" 2>/dev/null)"; then
+		builtin cd "\$@"
+		return \$?
+	fi
+	if [ "\$resolved" != "\$HEWITT_PROJECT_ROOT" ] && [[ "\$resolved" != "\$HEWITT_PROJECT_ROOT/"* ]]; then
+		printf 'hewitt: shell is restricted to project directory (%s)\n' "\$HEWITT_PROJECT_NAME" >&2
+		return 1
+	fi
+	builtin cd "\$resolved"
+}
+
+pushd() {
+	printf 'hewitt: pushd is disabled in project shell\n' >&2
+	return 1
+}
+
+popd() {
+	printf 'hewitt: popd is disabled in project shell\n' >&2
+	return 1
+}
+
+PS1='[\$(_hewitt_rel_pwd)] \$ '
+EOF
+	exec bash --rcfile "$rcfile" -i
 }
 
 pick_interactive() {
