@@ -82,9 +82,6 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", err
 	}
-	if err := checkProfileFree(ctx, store, s.Agent, s.Profile); err != nil {
-		return "", err
-	}
 	m := Metadata{Agent: s.Agent, Image: s.Image, Name: s.Name, Profile: s.Profile, Operation: "run", Terminal: "tmux", Mode: s.Mode, Isolation: s.Isolation}
 	if s.Mode == "sidecar" {
 		m.Container = s.Target
@@ -249,11 +246,6 @@ func Authenticate(ctx context.Context, opts AgentOptions, operation string, in i
 	if err != nil {
 		return err
 	}
-	if operation != "status" {
-		if err := checkProfileFree(ctx, store, opts.Agent, opts.Profile); err != nil {
-			return err
-		}
-	}
 	metadata, err := createAgentContainer(ctx, store, create, Metadata{Agent: opts.Agent, Profile: opts.Profile, Operation: operation})
 	if err != nil {
 		return err
@@ -400,32 +392,4 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 		return docker.CreateOptions{}, "", err
 	}
 	return create, path, nil
-}
-
-// checkProfileFree refuses a second live user of a Codex profile: its refresh
-// tokens are single-use, so concurrent clients would revoke each other's login.
-// Records whose containers are gone or stopped do not count.
-func checkProfileFree(ctx context.Context, store *Store, client, id string) error {
-	if client != "codex" {
-		return nil
-	}
-	sessions, err := store.List()
-	if err != nil {
-		// An unreadable store also fails the metadata save that precedes every
-		// startup, so no second client can start; that error is reported there.
-		return nil
-	}
-	for _, m := range sessions {
-		if m.Agent != client || m.Profile != id || m.Mode == "exec" {
-			continue
-		}
-		running, err := (docker.Client{}).Running(ctx, m.ID)
-		if err != nil {
-			return err
-		}
-		if running {
-			return fmt.Errorf("codex profile %q is in use by running session %s; stop it or use another --profile (Codex refresh tokens are single-use)", id, m.ID)
-		}
-	}
-	return nil
 }
