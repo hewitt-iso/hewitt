@@ -168,7 +168,7 @@ func (Client) AttachTerminalSocket(ctx context.Context, id, socket string, in io
 	if terminal == "" || terminal == "dumb" {
 		terminal = "xterm-256color"
 	}
-	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=" + terminal, "--", id,
-		"tmux", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
+	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=" + terminal, "--env", "LANG=C.UTF-8", "--", id,
+		"tmux", "-u", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
 	return attach(ctx, id, in, out, stderr, args)
 }

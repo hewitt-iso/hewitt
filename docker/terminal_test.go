@@ -61,7 +61,7 @@ func TestAttachTerminalReconnects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	one := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--", testID, "tmux", "-N", "-S", terminalSocket, "attach-session", "-t", "=hewitt"}
+	one := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--env", "LANG=C.UTF-8", "--", testID, "tmux", "-u", "-N", "-S", terminalSocket, "attach-session", "-t", "=hewitt"}
 	if got := readArgs(t, log); !reflect.DeepEqual(got, append(one, one...)) {
 		t.Fatalf("args = %q", got)
 	}

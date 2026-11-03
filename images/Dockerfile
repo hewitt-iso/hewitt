@@ -2,6 +2,7 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 LABEL org.opencontainers.image.source="https://github.com/hewitt-iso/hewitt"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash-completion ca-certificates curl git less ripgrep procps libevent-core-2.1-7 libncursesw6 ncurses-term \
+    dbus gnome-keyring \
     && rm -rf /var/lib/apt/lists/*
 ENV HOME=/tmp TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/hewitt/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /tmp

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/profile"
 	"github.com/hewitt-iso/hewitt/session"
@@ -117,7 +118,7 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 		}
 	case 1:
 		_, _ = fmt.Fprint(stderr, "\r\n")
-		agents := []string{"claude", "codex", "opencode"}
+		agents := agent.Names
 		agentIdx, err := pickOption(in, stderr, "Select agent to log in", agents, "onboarding cancelled", "write onboarding prompt")
 		if err != nil {
 			return false, err

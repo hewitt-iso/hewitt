@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/hewitt-iso/hewitt/agent"
+
 	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/profile"
 	"github.com/hewitt-iso/hewitt/workspace"
@@ -338,9 +340,9 @@ func (m Metadata) validate() error {
 	return nil
 }
 
-func validateAgent(agent string) error {
-	switch agent {
-	case "claude", "codex", "opencode", "workspace":
+func validateAgent(name string) error {
+	switch {
+	case name == "workspace", slices.Contains(agent.Names, name):
 		return nil
 	default:
 		return fmt.Errorf("unsupported session agent")

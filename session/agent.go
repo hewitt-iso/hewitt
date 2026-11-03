@@ -21,11 +21,11 @@ import (
 
 // AgentOptions describes one native client invocation. Run images must contain
 // tmux, env, and the selected CLI on PATH and support execution as the invoking host user's UID/GID.
-// Empty run settings fall back to the Hewittfile, then to defaults.
+// Empty run settings fall back to hewitt.yml, then to defaults.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
 	Repository, Base                     string
-	// File selects a Hewittfile; empty looks for one in Repository.
+	// File selects a hewitt.yml; empty looks for one in Repository.
 	File                 string
 	Mode, Target         string
 	Workspace, Isolation string
@@ -150,7 +150,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if adapter != nil {
 			hosts = append(hosts, adapter.Hosts()...)
 		} else {
-			for _, name := range []string{"claude", "codex", "opencode"} {
+			for _, name := range agent.Names {
 				if a, err := agent.Lookup(name); err == nil {
 					hosts = append(hosts, a.Hosts()...)
 				}
@@ -319,7 +319,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 			return docker.CreateOptions{}, "", err
 		}
 		create.Mounts = []docker.BindMount{{Source: tools, Target: "/hewitt/tools"}}
-		for _, client := range []string{"claude", "codex", "opencode"} {
+		for _, client := range agent.Names {
 			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
 			if err != nil {
 				return docker.CreateOptions{}, "", err
@@ -370,7 +370,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 		{Source: tools, Target: "/hewitt/tools"},
 	}
 	if operation == "run" {
-		for _, client := range []string{"claude", "codex", "opencode"} {
+		for _, client := range agent.Names {
 			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
 			if err != nil {
 				return docker.CreateOptions{}, "", err
