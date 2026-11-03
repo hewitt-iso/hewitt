@@ -18,9 +18,9 @@ func NewRootCommand(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Help/version flags bypass hooks; Cobra's help command does not.
-			// Keep both help forms available when configuration is broken.
-			if cmd.Name() == "help" {
+			// Help/version/completion bypass configuration loading so they stay
+			// available when configuration is missing or broken.
+			if cmd.Name() == "help" || cmd.Name() == "completion" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion") {
 				return nil
 			}
 			loaded, err := config.Load(configPath)
@@ -32,7 +32,6 @@ func NewRootCommand(version string) *cobra.Command {
 		},
 	}
 	cmd.SetVersionTemplate("hewitt {{.Version}}\n")
-	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
 	cmd.AddCommand(newSessionCommands(&cfg)...)
 	cmd.AddCommand(newAgentCommand("run", &cfg), newAgentCommand("login", &cfg))

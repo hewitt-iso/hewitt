@@ -12,22 +12,36 @@ import (
 )
 
 func newSessionCommands(cfg *config.Config) []*cobra.Command {
-	withStore := func(run func(ctx context.Context, store *session.Store, id string, out io.Writer) error) func(*cobra.Command, []string) error {
+	withStore := func(prompt, emptyMsg string, filter func(ctx context.Context, m session.Metadata, status string) bool, run func(ctx context.Context, store *session.Store, id string, out io.Writer) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, args []string) error {
 			store, err := session.NewStore(cfg.DataDir)
 			if err != nil {
 				return err
 			}
-			return run(cmd.Context(), store, args[0], cmd.OutOrStdout())
+			ref, err := resolveOrPickSession(cmd, store, args, prompt, filter, emptyMsg)
+			if err != nil {
+				return err
+			}
+			return run(cmd.Context(), store, ref, cmd.OutOrStdout())
 		}
+	}
+	notStopped := func(_ context.Context, _ session.Metadata, status string) bool {
+		return status != "stopped"
+	}
+	notRunning := func(_ context.Context, _ session.Metadata, status string) bool {
+		return status != "running"
+	}
+	hasWorkspace := func(_ context.Context, m session.Metadata, _ string) bool {
+		return m.Workspace != nil || m.Copy != nil
 	}
 	implemented := []*cobra.Command{
 		{
-			Use:     "stop <session>",
-			Short:   "Stop a session's agent, keeping its container and workspace",
-			Example: "  hewitt stop <session>",
-			Args:    sessionArg,
-			RunE: withStore(func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
+			Use:               "stop [session]",
+			Short:             "Stop a session's agent, keeping its container and workspace",
+			Example:           "  hewitt stop <session>\n  hewitt stop",
+			Args:              optionalSessionArg,
+			ValidArgsFunction: completeSessions(cfg, notStopped),
+			RunE: withStore("Select a session to stop", "no running sessions found", notStopped, func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
 				resolved, err := session.Stop(ctx, store, id)
 				if err != nil {
 					return err
@@ -37,11 +51,12 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 			}),
 		},
 		{
-			Use:     "rm <session>",
-			Short:   "Remove a stopped session; refuses to discard uncommitted or unreturned work",
-			Example: "  hewitt rm <session>",
-			Args:    sessionArg,
-			RunE: withStore(func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
+			Use:               "rm [session]",
+			Short:             "Remove a stopped session; refuses to discard uncommitted or unreturned work",
+			Example:           "  hewitt rm <session>\n  hewitt rm",
+			Args:              optionalSessionArg,
+			ValidArgsFunction: completeSessions(cfg, notRunning),
+			RunE: withStore("Select a stopped session to remove", "no stopped sessions found", notRunning, func(ctx context.Context, store *session.Store, id string, out io.Writer) error {
 				resolved, err := session.Remove(ctx, store, id)
 				if err != nil {
 					return err
@@ -51,11 +66,12 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 			}),
 		},
 		{
-			Use:     "diff <session>",
-			Short:   "Show a session's changes since its workspace was created",
-			Example: "  hewitt diff <session>",
-			Args:    sessionArg,
-			RunE:    withStore(session.Diff),
+			Use:               "diff [session]",
+			Short:             "Show a session's changes since its workspace was created",
+			Example:           "  hewitt diff <session>\n  hewitt diff",
+			Args:              optionalSessionArg,
+			ValidArgsFunction: completeSessions(cfg, hasWorkspace),
+			RunE:              withStore("Select a session to diff", "no sessions with a separate workspace found", hasWorkspace, session.Diff),
 		},
 	}
 	commands := []*cobra.Command{
