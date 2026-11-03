@@ -31,6 +31,7 @@ USER 1000:1000
 CMD ["codex"]
 
 FROM base AS opencode
+LABEL org.opencontainers.image.description="Hewitt agent environment for OpenCode"
 ARG OPENCODE_VERSION=1.15.7
 RUN npm install --global "opencode-ai@${OPENCODE_VERSION}" \
     && npm cache clean --force \

@@ -13,6 +13,10 @@ on:
         description: Claude Code native version or channel
         default: latest
         required: true
+      opencode_version:
+        description: OpenCode npm version
+        default: latest
+        required: true
 
 permissions:
   contents: read
@@ -30,11 +34,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [codex, claude]
+        agent: [codex, claude, opencode]
     env:
       IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
       CODEX_VERSION: ${{ inputs.codex_version || 'latest' }}
       CLAUDE_VERSION: ${{ inputs.claude_version || 'latest' }}
+      OPENCODE_VERSION: ${{ inputs.opencode_version || 'latest' }}
       IMAGE_BUILD_FLAGS: --pull --no-cache
       AGENT: ${{ matrix.agent }}
     steps:
