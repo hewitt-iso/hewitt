@@ -11,12 +11,15 @@ import (
 
 const terminalSocket = "/tmp/hewitt-tmux.sock"
 
-// terminalKeys follows docker run -it: Ctrl-C stops the agent (tmux sends it
-// SIGHUP and ends the session, so attached clients return to the host shell),
-// and Ctrl-D detaches this client while the agent keeps running. Without
-// remain-on-exit, an exiting agent also ends the session instead of leaving a
-// dead pane.
-var terminalKeys = []string{"bind-key", "-n", "C-c", "kill-session", ";", "bind-key", "-n", "C-d", "detach-client"}
+// terminalKeys follows docker run -it: Ctrl-C stops the agent in the current
+// window (and ends the session when it was the last window), Ctrl-D detaches
+// this client while agents keep running, and new windows run hewitt-agent to
+// prompt for an agent or shell.
+var terminalKeys = []string{
+	"bind-key", "-n", "C-c", "kill-window", ";",
+	"bind-key", "-n", "C-d", "detach-client", ";",
+	"set-option", "-g", "default-command", "hewitt-agent",
+}
 
 // TerminalServerArgs runs the server in the foreground as the container process.
 // No user configuration is loaded, and no client owns the server's lifetime.

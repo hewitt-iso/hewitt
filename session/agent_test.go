@@ -91,7 +91,7 @@ esac
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Count(string(calls), "src="+canonical+",dst=/hewitt/profile") != 2 {
+		if strings.Count(string(calls), "src="+canonical+",dst=/hewitt/profile\n") != 2 {
 			t.Fatalf("login/run did not share profile: %s", calls)
 		}
 	}

@@ -31,9 +31,6 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 	notRunning := func(_ context.Context, _ session.Metadata, status string) bool {
 		return status != "running"
 	}
-	hasWorkspace := func(_ context.Context, m session.Metadata, _ string) bool {
-		return m.Workspace != nil || m.Copy != nil
-	}
 	implemented := []*cobra.Command{
 		{
 			Use:               "stop [session]",
@@ -52,7 +49,7 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 		},
 		{
 			Use:               "rm [session]",
-			Short:             "Remove a stopped session; refuses to discard uncommitted or unreturned work",
+			Short:             "Remove a stopped session and all its resources",
 			Example:           "  hewitt rm <session>\n  hewitt rm",
 			Args:              optionalSessionArg,
 			ValidArgsFunction: completeSessions(cfg, notRunning),
@@ -64,14 +61,6 @@ func newSessionCommands(cfg *config.Config) []*cobra.Command {
 				_, err = fmt.Fprintln(out, resolved)
 				return err
 			}),
-		},
-		{
-			Use:               "diff [session]",
-			Short:             "Show a session's changes since its workspace was created",
-			Example:           "  hewitt diff <session>\n  hewitt diff",
-			Args:              optionalSessionArg,
-			ValidArgsFunction: completeSessions(cfg, hasWorkspace),
-			RunE:              withStore("Select a session to diff", "no sessions with a separate workspace found", hasWorkspace, session.Diff),
 		},
 	}
 	commands := []*cobra.Command{

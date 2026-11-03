@@ -55,6 +55,29 @@ func Prepare(dataDir, client, id string) (string, error) {
 	return current, nil
 }
 
+// PrepareTools creates and validates the shared tools directory (<dataDir>/tools)
+// where on-demand agent installations are persisted across workspace containers.
+func PrepareTools(dataDir string) (string, error) {
+	if !filepath.IsAbs(dataDir) {
+		return "", fmt.Errorf("profile data directory must be absolute")
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", fmt.Errorf("create data directory: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	tools := filepath.Join(root, "tools")
+	if err := privateDir(tools); err != nil {
+		return "", err
+	}
+	if err := privateDir(filepath.Join(tools, "bin")); err != nil {
+		return "", err
+	}
+	return tools, nil
+}
+
 func privateDir(path string) error {
 	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("create profile directory: %w", err)

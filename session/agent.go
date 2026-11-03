@@ -45,9 +45,12 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if s.Mode == "exec" {
 		return runExternal(ctx, opts.DataDir, s, stderr)
 	}
-	adapter, err := agent.Lookup(s.Agent)
-	if err != nil {
-		return "", err
+	var adapter agent.Adapter
+	if s.Agent != "workspace" {
+		adapter, err = agent.Lookup(s.Agent)
+		if err != nil {
+			return "", err
+		}
 	}
 	// Resolve every host path before creating a workspace or container.
 	extra, err := s.hostMounts(adapter)
@@ -87,6 +90,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		m.Container = s.Target
 	}
 	preserved := "no workspace was created"
+	projectName := filepath.Base(s.repo)
 	switch s.Workspace {
 	case "worktree":
 		base := ""
@@ -99,13 +103,29 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 		m.Workspace = &worktree
 		root = worktree.Path
+		projectName = filepath.Base(worktree.Repository)
 		preserved = fmt.Sprintf("worktree %q (branch %s) preserved", worktree.Path, worktree.Branch)
-		create.Mounts = append(create.Mounts, docker.BindMount{Source: worktree.Path, Target: worktree.Path})
+		worktreesDir := filepath.Dir(worktree.Path)
+		create.Mounts = append(create.Mounts,
+			docker.BindMount{Source: worktree.Path, Target: worktree.Path},
+			docker.BindMount{Source: worktreesDir, Target: worktreesDir},
+		)
+		create.Env = append(create.Env,
+			"HEWITT_WORKSPACE_MODE=worktree",
+			"HEWITT_REPO="+worktree.Path,
+			"HEWITT_WORKTREES_DIR="+worktreesDir,
+			"HEWITT_BASE="+worktree.Base,
+			"HEWITT_INITIAL_WORKTREE_READY=1",
+		)
+		if s.Workdir != "" {
+			create.Env = append(create.Env, "HEWITT_SUBDIR="+s.Workdir)
+		}
 		if s.Git != "none" {
 			create.Mounts = append(create.Mounts, docker.BindMount{Source: worktree.GitDir, Target: worktree.GitDir, ReadOnly: s.Git == "ro"})
 		}
 	case "direct":
 		create.Mounts = append(create.Mounts, direct...)
+		create.Env = append(create.Env, "HEWITT_WORKSPACE_MODE=direct")
 		preserved = "source paths were used directly"
 	case "copy":
 		source, err := filepath.EvalSymlinks(s.repo)
@@ -118,15 +138,28 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 		m.Copy = &c
 		root = c.Path
+		projectName = filepath.Base(c.Source)
 		preserved = fmt.Sprintf("copy %q preserved", c.Path)
 		create.Mounts = append(create.Mounts, docker.BindMount{Source: c.Path, Target: c.Path})
+		create.Env = append(create.Env, "HEWITT_WORKSPACE_MODE=copy")
 	}
+	create.Env = append(create.Env, "HEWITT_PROJECT_NAME="+projectName)
 	if s.egress() {
 		image := s.EgressImage
 		if image == "" {
 			image = DefaultEgressImage
 		}
-		e, err := createEgress(ctx, opts.DataDir, image, append(adapter.Hosts(), s.Allow...))
+		var hosts []string
+		if adapter != nil {
+			hosts = append(hosts, adapter.Hosts()...)
+		} else {
+			for _, name := range []string{"claude", "codex", "opencode"} {
+				if a, err := agent.Lookup(name); err == nil {
+					hosts = append(hosts, a.Hosts()...)
+				}
+			}
+		}
+		e, err := createEgress(ctx, opts.DataDir, image, append(hosts, s.Allow...))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
@@ -276,6 +309,36 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err := ctx.Err(); err != nil {
 		return docker.CreateOptions{}, "", err
 	}
+	if opts.Agent == "workspace" {
+		if opts.Image == "" {
+			opts.Image = agent.DefaultImage
+		}
+		create := docker.CreateOptions{
+			Image: opts.Image, Name: opts.Name, Entrypoint: "hewitt-agent",
+			Command: []string{"run"}, Workdir: "/tmp",
+			DisableLogs: operation != "run",
+			User:        fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		}
+		if err := create.Validate(); err != nil {
+			return docker.CreateOptions{}, "", err
+		}
+		tools, err := profile.PrepareTools(opts.DataDir)
+		if err != nil {
+			return docker.CreateOptions{}, "", err
+		}
+		create.Mounts = []docker.BindMount{{Source: tools, Target: "/hewitt/tools"}}
+		for _, client := range []string{"claude", "codex", "opencode"} {
+			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
+			if err != nil {
+				return docker.CreateOptions{}, "", err
+			}
+			create.Mounts = append(create.Mounts, docker.BindMount{Source: p, Target: "/hewitt/profiles/" + client})
+		}
+		if err := create.Validate(); err != nil {
+			return docker.CreateOptions{}, "", err
+		}
+		return create, "", nil
+	}
 	adapter, err := agent.Lookup(opts.Agent)
 	if err != nil {
 		return docker.CreateOptions{}, "", err
@@ -306,7 +369,23 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
-	create.Mounts = []docker.BindMount{{Source: path, Target: agent.ProfilePath}}
+	tools, err := profile.PrepareTools(opts.DataDir)
+	if err != nil {
+		return docker.CreateOptions{}, "", err
+	}
+	create.Mounts = []docker.BindMount{
+		{Source: path, Target: agent.ProfilePath},
+		{Source: tools, Target: "/hewitt/tools"},
+	}
+	if operation == "run" {
+		for _, client := range []string{"claude", "codex", "opencode"} {
+			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
+			if err != nil {
+				return docker.CreateOptions{}, "", err
+			}
+			create.Mounts = append(create.Mounts, docker.BindMount{Source: p, Target: "/hewitt/profiles/" + client})
+		}
+	}
 	if variable := adapter.TokenVariable(); variable != "" && operation != "login" {
 		token, err := profile.TokenFile(path)
 		if err != nil {

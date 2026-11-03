@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,49 +151,38 @@ func CheckRemovable(ctx context.Context, w Worktree) error {
 	return nil
 }
 
-// Diff writes the worktree's changes since its base commit: commits on the
-// session branch, uncommitted edits, and untracked files that are not ignored.
-// It reads only; the index and files are unchanged.
-func Diff(ctx context.Context, w Worktree, out io.Writer) error {
+// RemoveForce removes a worktree and any sibling worktrees created beneath its
+// parent worktrees directory for the same repository, discarding uncommitted or
+// untracked files while retaining branches.
+func RemoveAll(ctx context.Context, w Worktree) error {
 	if err := w.Validate(); err != nil {
 		return err
 	}
-	if w.Base == "" {
-		return fmt.Errorf("session predates recorded base commits; inspect with git -C %s diff", w.Path)
+	parent := filepath.Dir(w.Path)
+	entries, err := os.ReadDir(parent)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read worktrees directory: %w", err)
 	}
-	if err := gitStream(ctx, out, w.Path, "diff", w.Base, "--"); err != nil {
-		return err
-	}
-	untracked, err := git(ctx, w.Path, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return err
-	}
-	for _, file := range strings.Split(untracked, "\x00") {
-		if file == "" {
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if err := gitStream(ctx, out, w.Path, "diff", "--no-index", "--", os.DevNull, file); err != nil {
-			return err
+		candidate := filepath.Join(parent, entry.Name())
+		common, err := git(ctx, candidate, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(common); err == nil && resolved == w.GitDir {
+			if _, err := git(ctx, w.GitDir, "worktree", "remove", "--force", "--", candidate); err != nil {
+				return fmt.Errorf("remove worktree %q: %w", candidate, err)
+			}
 		}
 	}
-	return nil
-}
-
-// gitStream writes Git's output to out. Exit status 1 means "differences" for
-// diff commands and is not an error.
-func gitStream(ctx context.Context, out io.Writer, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	var stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = out, &stderr
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && stderr.Len() == 0 {
-			return nil
+	if _, err := os.Lstat(w.Path); err == nil {
+		if _, err := git(ctx, w.GitDir, "worktree", "remove", "--force", "--", w.Path); err != nil {
+			return fmt.Errorf("remove worktree: %w", err)
 		}
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
-		return fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
+	_, _ = git(ctx, w.GitDir, "worktree", "prune")
 	return nil
 }

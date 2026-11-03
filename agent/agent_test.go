@@ -24,6 +24,12 @@ printf '%s\n' "$@"
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
+			launcher := `#!/bin/sh
+exec "$@"
+`
+			if err := os.WriteFile(filepath.Join(dir, "hewitt-agent"), []byte(launcher), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			env, err := exec.LookPath("env")
 			if err != nil {
 				t.Fatal(err)
