@@ -13,9 +13,9 @@ import (
 )
 
 // settings are the merged run settings: command-line values over the
-// Hewittfile, then defaults. They are checked before any side effects.
+// hewitt.yml, then defaults. They are checked before any side effects.
 type settings struct {
-	config.Hewittfile
+	config.Project
 	repo   string
 	danger map[string]bool
 	mounts []mountSpec
@@ -35,11 +35,11 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	if err != nil {
 		return settings{}, fmt.Errorf("locate repository: %w", err)
 	}
-	file, err := config.LoadHewittfile(opts.File, repo)
+	file, err := config.LoadProject(opts.File, repo)
 	if err != nil {
 		return settings{}, err
 	}
-	s := settings{Hewittfile: file, repo: repo, danger: map[string]bool{}}
+	s := settings{Project: file, repo: repo, danger: map[string]bool{}}
 	for _, value := range []struct {
 		name, value string
 		allowed     []string
@@ -84,7 +84,7 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	}
 	if s.Agent == "" {
 		if s.Mode == "exec" {
-			return settings{}, fmt.Errorf("select an agent: hewitt run <agent> or AGENT in the Hewittfile")
+			return settings{}, fmt.Errorf("select an agent: hewitt run <agent> or agent in hewitt.yml")
 		}
 		s.Agent = "workspace"
 	}
@@ -133,7 +133,7 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 }
 
 // check enforces each isolation level. Weakening a level requires a matching
-// DANGER item; settings a mode cannot enforce are refused, never ignored.
+// danger item; settings a mode cannot enforce are refused, never ignored.
 func (s settings) check() error {
 	if (s.Mode == "new") != (s.Target == "") {
 		return fmt.Errorf("mode %s: exec and sidecar require a target container; new takes none", s.Mode)
@@ -143,47 +143,47 @@ func (s settings) check() error {
 			return fmt.Errorf("exec mode runs inside an external container and cannot enforce %s isolation; use shared isolation or mode new/sidecar", s.Isolation)
 		}
 		for _, field := range []struct{ name, value string }{
-			{"image", s.Image}, {"name", s.Name}, {"profile", s.Profile}, {"workspace", s.Workspace}, {"GIT", s.Git},
-			{"ROOTFS", s.RootFS}, {"NETWORK", s.Network}, {"RUNTIME", s.Runtime},
-			{"MEMORY", s.Memory}, {"CPUS", s.CPUs}, {"PIDS", s.PIDs}, {"RULES", s.Rules}, {"ENV_FILE", s.EnvFile}, {"EGRESS_IMAGE", s.EgressImage},
+			{"image", s.Image}, {"name", s.Name}, {"profile", s.Profile}, {"workspace", s.Workspace}, {"git", s.Git},
+			{"rootfs", s.RootFS}, {"network", s.Network}, {"runtime", s.Runtime},
+			{"limits.memory", s.Memory}, {"limits.cpus", s.CPUs}, {"limits.pids", s.PIDs}, {"rules", s.Rules}, {"env_file", s.EnvFile}, {"egress.image", s.EgressImage},
 		} {
 			if field.value != "" {
 				return fmt.Errorf("%s is not supported in exec mode; the external container's own configuration applies", field.name)
 			}
 		}
 		if len(s.mounts) > 0 || len(s.Allow) > 0 {
-			return fmt.Errorf("MOUNT and ALLOW are not supported in exec mode; the external container's own configuration applies")
+			return fmt.Errorf("mounts and egress.allow are not supported in exec mode; the external container's own configuration applies")
 		}
 		if s.Workdir != "" && !filepath.IsAbs(s.Workdir) {
-			return fmt.Errorf("exec mode WORKDIR must be an absolute container path")
+			return fmt.Errorf("exec mode workdir must be an absolute container path")
 		}
 		return nil
 	}
 	if s.Image == "" {
-		return fmt.Errorf("select an image: --image or FROM in the Hewittfile")
+		return fmt.Errorf("select an image: --image or image in hewitt.yml")
 	}
 	if s.Git != "" && s.Git != "rw" && s.Workspace != "" && s.Workspace != "worktree" {
-		return fmt.Errorf("GIT applies only to the worktree workspace")
+		return fmt.Errorf("git applies only to the worktree workspace")
 	}
 	if s.Workdir != "" && !filepath.IsLocal(s.Workdir) {
-		return fmt.Errorf("WORKDIR must be a path inside the workspace")
+		return fmt.Errorf("workdir must be a path inside the workspace")
 	}
 	level := slices.Index(config.Isolations, s.Isolation)
 	need := func(item, what string) error {
 		if s.danger[item] {
 			return nil
 		}
-		return fmt.Errorf("%s isolation forbids %s; add DANGER %s (or --danger %s) to allow it explicitly", s.Isolation, what, item, item)
+		return fmt.Errorf("%s isolation forbids %s; add danger: [%s] (or --danger %s) to allow it explicitly", s.Isolation, what, item, item)
 	}
 	var checks []error
 	if s.Network == "host" {
 		checks = append(checks, need("network", "host networking"))
 	}
 	if strings.HasPrefix(s.Network, "container:") {
-		return fmt.Errorf("use MODE sidecar to share another container's network")
+		return fmt.Errorf("use mode sidecar to share another container's network")
 	}
 	if s.Mode == "sidecar" && s.Network != "" {
-		return fmt.Errorf("sidecar mode always uses the target container's network; remove NETWORK")
+		return fmt.Errorf("sidecar mode always uses the target container's network; remove network")
 	}
 	if level >= 1 {
 		if s.Workspace == "direct" {
@@ -199,7 +199,7 @@ func (s settings) check() error {
 		}
 		for _, m := range s.mounts {
 			if !m.readOnly {
-				checks = append(checks, need("host-paths", "read-write MOUNT "+m.src))
+				checks = append(checks, need("host-paths", "read-write mount "+m.src))
 			}
 		}
 	}
@@ -215,10 +215,10 @@ func (s settings) check() error {
 		}
 	}
 	if level == 3 && (s.Runtime == "" || s.Runtime == "runc") {
-		return fmt.Errorf("hardened isolation requires RUNTIME naming a separate sandbox runtime, such as runsc or kata-runtime")
+		return fmt.Errorf("hardened isolation requires runtime naming a separate sandbox runtime, such as runsc or kata-runtime")
 	}
 	if (len(s.Allow) > 0 || s.EgressImage != "") && !s.egress() {
-		return fmt.Errorf("ALLOW and EGRESS_IMAGE apply only to restricted or hardened sessions without NETWORK")
+		return fmt.Errorf("egress.allow and egress.image apply only to restricted or hardened sessions without network")
 	}
 	for _, err := range checks {
 		if err != nil {
@@ -245,7 +245,7 @@ func (s settings) egress() bool {
 	return s.Mode == "new" && s.Network == "" && slices.Index(config.Isolations, s.Isolation) >= 2
 }
 
-// describe reports the effective settings when DANGER weakens the level, so the
+// describe reports the effective settings when danger weakens the level, so the
 // weakened configuration stays visible. It returns "" otherwise.
 func (s settings) describe(create docker.CreateOptions) string {
 	if len(s.danger) == 0 {
@@ -303,7 +303,7 @@ func parseMount(spec, base string, defaultReadOnly bool) (mountSpec, error) {
 	}
 	if !filepath.IsAbs(m.src) {
 		if base == "" {
-			return mountSpec{}, fmt.Errorf("mount %q: relative source without a Hewittfile directory", spec)
+			return mountSpec{}, fmt.Errorf("mount %q: relative source without a hewitt.yml directory", spec)
 		}
 		m.src = filepath.Join(base, m.src)
 	}
@@ -312,7 +312,7 @@ func parseMount(spec, base string, defaultReadOnly bool) (mountSpec, error) {
 }
 
 // resolveSource returns the real path of a mount source. Symlinks below base,
-// or anywhere in a source outside base, require DANGER symlinks; symlinks in
+// or anywhere in a source outside base, require danger: [symlinks]; symlinks in
 // base itself (for example macOS /tmp) are trusted user configuration.
 func (s settings) resolveSource(path, base string) (string, error) {
 	real, err := filepath.EvalSymlinks(path)
@@ -329,7 +329,7 @@ func (s settings) resolveSource(path, base string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("mount source %q follows a symlink to %q; mount the real path or add DANGER symlinks", path, real)
+	return "", fmt.Errorf("mount source %q follows a symlink to %q; mount the real path or add danger: [symlinks]", path, real)
 }
 
 // hostMounts resolves MOUNT lines and agent rules before any workspace exists.

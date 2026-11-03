@@ -14,14 +14,14 @@ func TestRunImagePrecedence(t *testing.T) {
 		{name: "codex default", client: "codex", want: "ghcr.io/hewitt-iso/hewitt:latest"},
 		{name: "claude default", client: "claude", want: "ghcr.io/hewitt-iso/hewitt:latest"},
 		{name: "opencode default", client: "opencode", want: "ghcr.io/hewitt-iso/hewitt:latest"},
-		{name: "file overrides default", client: "codex", file: "FROM project:test\n", want: "project:test"},
-		{name: "flag overrides file", client: "codex", file: "FROM project:test\n", image: "custom:test", want: "custom:test"},
+		{name: "file overrides default", client: "codex", file: "image: project:test\n", want: "project:test"},
+		{name: "flag overrides file", client: "codex", file: "image: project:test\n", image: "custom:test", want: "custom:test"},
 		{name: "exec has no default image", client: "codex", mode: "exec", target: "external"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := t.TempDir()
 			if tt.file != "" {
-				if err := os.WriteFile(filepath.Join(repo, "Hewittfile"), []byte(tt.file), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(repo, "hewitt.yml"), []byte(tt.file), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

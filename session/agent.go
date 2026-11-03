@@ -21,11 +21,11 @@ import (
 
 // AgentOptions describes one native client invocation. Run images must contain
 // tmux, env, and the selected CLI on PATH and support execution as the invoking host user's UID/GID.
-// Empty run settings fall back to the Hewittfile, then to defaults.
+// Empty run settings fall back to hewitt.yml, then to defaults.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
 	Repository, Base                     string
-	// File selects a Hewittfile; empty looks for one in Repository.
+	// File selects a hewitt.yml; empty looks for one in Repository.
 	File                 string
 	Mode, Target         string
 	Workspace, Isolation string
