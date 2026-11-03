@@ -69,7 +69,7 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 
 	// Step 2: Create new workspace?
 	step2, err := pickOption(in, stderr, "[2/3] Create new workspace?", []string{
-		"worktree (isolated git branch)",
+		"volume   (git repository inside the container)",
 		"copy     (isolated directory copy)",
 		"skip     (finish without starting)",
 	}, "onboarding cancelled", "write onboarding prompt")
@@ -81,7 +81,7 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 	if opts.Workspace == "" {
 		switch step2 {
 		case 0:
-			opts.Workspace = "worktree"
+			opts.Workspace = "volume"
 		case 1:
 			opts.Workspace = "copy"
 		}

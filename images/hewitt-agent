@@ -12,6 +12,18 @@ TOOLS_DIR="${HEWITT_TOOLS_DIR:-/hewitt/tools}"
 BIN_DIR="$TOOLS_DIR/bin"
 export PATH="$BIN_DIR:$PATH"
 
+# Sessions run as the host UID, which the image usually lacks; ssh refuses to
+# run without a passwd entry. nss_wrapper supplies one without touching /etc.
+if ! getent passwd "$(id -u)" >/dev/null 2>&1 && [ -z "${NSS_WRAPPER_PASSWD:-}" ]; then
+	NSS_WRAPPER_PASSWD="$(mktemp /tmp/hewitt-passwd.XXXXXX)"
+	NSS_WRAPPER_GROUP="$(mktemp /tmp/hewitt-group.XXXXXX)"
+	cat /etc/passwd >"$NSS_WRAPPER_PASSWD"
+	printf 'hewitt:x:%s:%s:Hewitt:%s:/bin/bash\n' "$(id -u)" "$(id -g)" "${HOME:-/tmp}" >>"$NSS_WRAPPER_PASSWD"
+	cat /etc/group >"$NSS_WRAPPER_GROUP"
+	getent group "$(id -g)" >/dev/null 2>&1 || printf 'hewitt:x:%s:\n' "$(id -g)" >>"$NSS_WRAPPER_GROUP"
+	export NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP LD_PRELOAD="libnss_wrapper.so${LD_PRELOAD:+ $LD_PRELOAD}"
+fi
+
 # agent_binary maps an agent name to its executable.
 agent_binary() {
 	case "$1" in
@@ -132,11 +144,22 @@ create_worktree_if_needed() {
 	if [ -z "${HEWITT_REPO:-}" ] || [ -z "${HEWITT_WORKTREES_DIR:-}" ]; then
 		return 0
 	fi
-	local token
-	token="$(head -c 10 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-	local wt_path="$HEWITT_WORKTREES_DIR/$token"
-	local branch="hewitt/$token"
-	local base="${HEWITT_BASE:-HEAD}"
+	local wt_path branch base="${HEWITT_BASE:-HEAD}"
+	if [ -n "${HEWITT_BRANCH:-}" ]; then
+		# Volume workspace: readable sequential names; hewitt sync imports
+		# them as hewitt/<session>/<branch>-<n>.
+		local n=2
+		while [ -e "$HEWITT_REPO-$n" ] || git -C "$HEWITT_REPO" show-ref --verify --quiet "refs/heads/$HEWITT_BRANCH-$n"; do
+			n=$((n + 1))
+		done
+		wt_path="$HEWITT_REPO-$n"
+		branch="$HEWITT_BRANCH-$n"
+	else
+		local token
+		token="$(head -c 10 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+		wt_path="$HEWITT_WORKTREES_DIR/$token"
+		branch="hewitt/$token"
+	fi
 	mkdir -p "$HEWITT_WORKTREES_DIR"
 	git -C "$HEWITT_REPO" worktree add -b "$branch" -- "$wt_path" "$base" >&2
 	local target="$wt_path"

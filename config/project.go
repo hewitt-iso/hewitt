@@ -32,21 +32,23 @@ type Project struct {
 	// Mode is new, exec, or sidecar; Target names the existing container for
 	// exec and sidecar.
 	Mode, Target string
-	// Workspace is worktree, direct, or copy. WorkspaceArgs is the base ref for
-	// worktree or the selected paths for direct and copy.
+	// Workspace is volume, worktree, direct, or copy. WorkspaceArgs is the base
+	// ref for volume and worktree or the selected paths for direct and copy.
 	Workspace     string
 	WorkspaceArgs []string
 	Workdir       string
 	Git           string
-	Mounts        []string
-	Isolation     string
-	RootFS        string
-	Network       string
-	Runtime       string
-	Memory        string
-	CPUs          string
-	PIDs          string
-	Rules         string
+	// SSH forwards the host ssh-agent socket so the agent can push over SSH.
+	SSH       bool
+	Mounts    []string
+	Isolation string
+	RootFS    string
+	Network   string
+	Runtime   string
+	Memory    string
+	CPUs      string
+	PIDs      string
+	Rules     string
 	// EnvFile holds agent credentials such as API keys in KEY=VALUE lines.
 	// Only its path is configuration; values are read by Docker, not Hewitt.
 	EnvFile string
@@ -60,7 +62,7 @@ type Project struct {
 // Allowed values shared by the file loader and command-line validation.
 var (
 	Modes       = []string{"new", "exec", "sidecar"}
-	Workspaces  = []string{"worktree", "direct", "copy"}
+	Workspaces  = []string{"volume", "worktree", "direct", "copy"}
 	Isolations  = []string{"shared", "isolated", "restricted", "hardened"}
 	DangerItems = []string{"network", "host-paths", "writable-root", "symlinks"}
 )
@@ -76,6 +78,7 @@ type projectYAML struct {
 	Workspace workspaceYAML `yaml:"workspace"`
 	Workdir   string        `yaml:"workdir"`
 	Git       string        `yaml:"git"`
+	SSH       bool          `yaml:"ssh"`
 	Mounts    []string      `yaml:"mounts"`
 	Rules     string        `yaml:"rules"`
 	Isolation string        `yaml:"isolation"`
@@ -96,7 +99,7 @@ type projectYAML struct {
 }
 
 // workspaceYAML accepts either a bare type (workspace: copy) or a mapping with
-// type, base (worktree), and paths (direct, copy).
+// type, base (volume, worktree), and paths (direct, copy).
 type workspaceYAML struct {
 	Type  string   `yaml:"type"`
 	Base  string   `yaml:"base"`
@@ -170,7 +173,7 @@ func ParseProject(data []byte, name string) (Project, error) {
 	p := Project{
 		Image: y.Image, Agent: y.Agent, Profile: y.Profile, Name: y.Name,
 		Mode: y.Mode, Target: y.Target, Workspace: y.Workspace.Type,
-		Workdir: y.Workdir, Git: y.Git, Mounts: y.Mounts, Rules: y.Rules,
+		Workdir: y.Workdir, Git: y.Git, SSH: y.SSH, Mounts: y.Mounts, Rules: y.Rules,
 		Isolation: y.Isolation, RootFS: y.RootFS, Network: y.Network, Runtime: y.Runtime,
 		Memory: y.Limits.Memory, CPUs: y.Limits.CPUs, PIDs: y.Limits.PIDs,
 		EnvFile: y.EnvFile, Allow: y.Egress.Allow, EgressImage: y.Egress.Image, Danger: y.Danger,
@@ -209,16 +212,16 @@ func (p *Project) validate(w workspaceYAML) error {
 		return fmt.Errorf("workspace.base and workspace.paths require workspace.type")
 	}
 	switch w.Type {
-	case "worktree":
+	case "volume", "worktree":
 		if len(w.Paths) > 0 {
-			return fmt.Errorf("workspace.paths applies to direct and copy; use workspace.base for worktree")
+			return fmt.Errorf("workspace.paths applies to direct and copy; use workspace.base for %s", w.Type)
 		}
 		if w.Base != "" {
 			p.WorkspaceArgs = []string{w.Base}
 		}
 	case "direct", "copy":
 		if w.Base != "" {
-			return fmt.Errorf("workspace.base applies only to worktree")
+			return fmt.Errorf("workspace.base applies only to volume and worktree")
 		}
 		p.WorkspaceArgs = w.Paths
 	}

@@ -2,8 +2,14 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 LABEL org.opencontainers.image.source="https://github.com/hewitt-iso/hewitt"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash-completion ca-certificates curl git less ripgrep procps libevent-core-2.1-7 libncursesw6 ncurses-term \
-    dbus gnome-keyring \
+    dbus gnome-keyring openssh-client libnss-wrapper \
     && rm -rf /var/lib/apt/lists/*
+# GitHub host keys come from its TLS-authenticated metadata API; other hosts
+# are accepted on first use.
+RUN curl -fsSL https://api.github.com/meta \
+    | node -e 'const m=JSON.parse(require("fs").readFileSync(0));for(const k of m.ssh_keys)for(const h of ["github.com","ssh.github.com"])console.log(h+" "+k)' \
+    > /etc/ssh/ssh_known_hosts \
+    && printf 'Host *\n    StrictHostKeyChecking accept-new\n' > /etc/ssh/ssh_config.d/hewitt.conf
 ENV HOME=/tmp TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/hewitt/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /tmp
 

@@ -33,6 +33,7 @@ func TestFirstRunOnboarding(t *testing.T) {
 	}
 
 	script := `#!/bin/sh
+if [ "$1 $2" = "volume inspect" ]; then printf 'Error: No such volume\n' >&2; exit 1; fi
 case "$2" in
 create) printf '%s\n' '` + containerID + `' ;;
 exec) case "$*" in
@@ -100,13 +101,13 @@ esac
 		}
 	}
 
-	// Verify session was created with a worktree workspace.
+	// Verify session was created with a volume workspace.
 	store, err := session.NewStore(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := store.Get(containerID)
-	if err != nil || m.Workspace == nil {
+	if err != nil || m.Volume == nil || m.Workspace != nil {
 		t.Fatalf("session metadata = %+v, %v", m, err)
 	}
 

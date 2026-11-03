@@ -63,6 +63,7 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	override(&s.Name, opts.Name)
 	override(&s.Profile, opts.Profile)
 	override(&s.Isolation, opts.Isolation)
+	s.SSH = s.SSH || opts.SSH
 	if opts.Target != "" && opts.Mode == "" {
 		return settings{}, fmt.Errorf("--target requires --mode exec or --mode sidecar")
 	}
@@ -74,10 +75,13 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 		s.Workspace, s.WorkspaceArgs = opts.Workspace, nil
 	}
 	if opts.Base != "" {
-		if s.Workspace != "" && s.Workspace != "worktree" {
-			return settings{}, fmt.Errorf("--base applies only to the worktree workspace")
+		if s.Workspace == "" {
+			s.Workspace = "volume"
 		}
-		s.Workspace, s.WorkspaceArgs = "worktree", []string{opts.Base}
+		if s.Workspace != "volume" && s.Workspace != "worktree" {
+			return settings{}, fmt.Errorf("--base applies only to the volume and worktree workspaces")
+		}
+		s.WorkspaceArgs = []string{opts.Base}
 	}
 	for _, item := range append(slices.Clone(s.Danger), opts.Danger...) {
 		s.danger[item] = true
@@ -120,9 +124,9 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	}
 	if s.Mode != "exec" {
 		if s.Workspace == "" {
-			s.Workspace = "worktree"
+			s.Workspace = "volume"
 		}
-		if s.Git == "" {
+		if s.Git == "" && s.Workspace == "worktree" {
 			s.Git = "rw"
 		}
 		if s.Profile == "" {
@@ -150,6 +154,9 @@ func (s settings) check() error {
 			if field.value != "" {
 				return fmt.Errorf("%s is not supported in exec mode; the external container's own configuration applies", field.name)
 			}
+		}
+		if s.SSH {
+			return fmt.Errorf("ssh is not supported in exec mode; the external container's own configuration applies")
 		}
 		if len(s.mounts) > 0 || len(s.Allow) > 0 {
 			return fmt.Errorf("mounts and egress.allow are not supported in exec mode; the external container's own configuration applies")
@@ -186,6 +193,10 @@ func (s settings) check() error {
 		return fmt.Errorf("sidecar mode always uses the target container's network; remove network")
 	}
 	if level >= 1 {
+		if s.Workspace == "worktree" && (s.Git == "" || s.Git == "rw") {
+			// Host Git runs hooks and command settings from a shared .git.
+			checks = append(checks, need("host-paths", "the worktree workspace's read-write host .git (use the volume workspace, or git: ro)"))
+		}
 		if s.Workspace == "direct" {
 			specs := s.WorkspaceArgs
 			if len(specs) == 0 {
@@ -216,6 +227,9 @@ func (s settings) check() error {
 	}
 	if level == 3 && (s.Runtime == "" || s.Runtime == "runc") {
 		return fmt.Errorf("hardened isolation requires runtime naming a separate sandbox runtime, such as runsc or kata-runtime")
+	}
+	if s.SSH && s.egress() {
+		return fmt.Errorf("ssh needs direct network access; the %s egress proxy carries only HTTP(S)", s.Isolation)
 	}
 	if (len(s.Allow) > 0 || s.EgressImage != "") && !s.egress() {
 		return fmt.Errorf("egress.allow and egress.image apply only to restricted or hardened sessions without network")

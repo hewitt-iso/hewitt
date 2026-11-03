@@ -37,11 +37,13 @@ func Stop(ctx context.Context, store *Store, id string) (string, error) {
 }
 
 // Remove deletes a stopped session's Hewitt-owned resources (including all
-// worktrees and copies) and then its metadata. Running sessions are refused.
-// Branches, direct source paths, and external containers are kept.
+// worktrees, copies, and volumes) and then its metadata. Running sessions are
+// refused. A volume's branches are synced first; uncommitted or untracked work
+// in it refuses removal unless force discards it. Branches, direct source
+// paths, and external containers are kept.
 // A partial failure leaves the metadata, so rerunning finishes the cleanup.
 // It returns the resolved full session ID.
-func Remove(ctx context.Context, store *Store, id string) (string, error) {
+func Remove(ctx context.Context, store *Store, id string, force bool) (string, error) {
 	m, err := store.Resolve(id)
 	if err != nil {
 		return "", err
@@ -73,6 +75,11 @@ func Remove(ctx context.Context, store *Store, id string) (string, error) {
 			return "", fmt.Errorf("container %s is running; stop the session first with hewitt stop %s", container, m.ID)
 		}
 	}
+	if m.Volume != nil && !force {
+		if err := checkVolume(ctx, m); err != nil {
+			return "", err
+		}
+	}
 	for _, container := range containers {
 		if err := client.Remove(ctx, container); err != nil {
 			return "", err
@@ -88,6 +95,11 @@ func Remove(ctx context.Context, store *Store, id string) (string, error) {
 	}
 	if m.Workspace != nil {
 		if err := workspace.RemoveAll(ctx, *m.Workspace); err != nil {
+			return "", err
+		}
+	}
+	if m.Volume != nil {
+		if err := dropVolume(ctx, *m.Volume); err != nil {
 			return "", err
 		}
 	}

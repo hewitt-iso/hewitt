@@ -1,7 +1,7 @@
 # Hewitt
 
 Hewitt is a local-first CLI for running AI coding agents in isolated Docker
-containers, each with its own Git worktree and persistent terminal session.
+containers, each with its own Git repository and persistent terminal session.
 The goal is to run multiple agents independently, detach and reconnect, inspect
 their changes, and manage their environments from one CLI.
 
@@ -10,13 +10,14 @@ subscription login flow with a dedicated persistent profile. `run` starts a
 workspace container with a persistent tmux terminal inside Docker; `--detach` starts it in
 the background, and `attach` reconnects. `ps` lists saved sessions and their
 status. `stop` and `rm` manage session lifecycles and workspace cleanup.
-Each agent window creates a Git worktree on its own branch. `logs` is not implemented yet.
+Each session keeps its repository in a Docker volume; `sync` imports its
+branches into the host repository. `logs` is not implemented yet.
 
 ## Requirements
 
 - Linux or macOS
 - Go 1.26 or newer
-- Git on PATH to create and manage session worktrees
+- Git on PATH to resolve repositories and import session branches
 - Make and a C compiler for `make check` (Go's race detector requires CGO)
 
 Docker and agent accounts are not needed to build or run unit tests. Container
@@ -84,8 +85,8 @@ this change. Existing containers keep their original tmux binary.
 Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand into `<data_dir>/tools`
 (mounted at `/hewitt/tools`) the first time they are selected, so the base image
 stays small and installed CLIs persist across containers. Every new tmux window
-(`Ctrl-B, C`) prompts you to choose an agent (creating a fresh worktree for it)
-or open a shell in the current project directory.
+(`Ctrl-B, C`) prompts you to choose an agent (creating a fresh worktree and
+branch `<branch>-2`, `-3`, … for it) or open a shell in the current project directory.
 
 When host config sync is enabled, OpenCode imports include `tui.json`,
 `tui.jsonc`, and custom `themes/`, preserving theme and keybinding preferences.
@@ -110,11 +111,70 @@ Log in and run:
 
 `run` uses the current directory's repository by default. Use `--repo PATH`
 for another checkout and `--base REF` to start at a specific commit, branch, or
-tag (default `HEAD`). The repository must have a commit. Each run creates
-`<data_dir>/worktrees/<random-id>` on a new `hewitt/<random-id>` branch.
-Uncommitted source changes are left alone and are not copied into the worktree.
-Linked source worktrees are supported; the shared Git directory is resolved.
-No existing branch is reset or reused. Login does not create a worktree.
+tag (default `HEAD`). The repository must have a commit. Login does not create
+a workspace.
+
+### Volume workspace (default)
+
+The session repository lives in the Docker volume `hewitt-<name>`, mounted at
+`/hewitt/work/<project>`. Its `.git`, hooks, and configuration belong to the
+container; the host `.git` is never mounted writable, so nothing an agent writes
+there can run on the host. The volume borrows history from the host through a
+read-only mount of `.git/objects` (a Git alternate), so creation copies nothing.
+
+- The session name comes from `--name` (or `name` in `hewitt.yml`) or is the
+  first free `<agent>-<n>`, such as `claude-1`. It names the volume and the host
+  branch namespace.
+- The first branch keeps the host branch name when the base is a branch (`main`),
+  otherwise `work`. Uncommitted host changes are not copied.
+- Commits use the host repository's `user.name` and `user.email`; `origin` is
+  copied without any credentials embedded in an HTTP(S) URL.
+- `refs/hewitt/<name>/base` keeps the base commit reachable, so `git gc` on the
+  host cannot remove objects the volume borrows. Moving or deleting the host
+  repository breaks the volume.
+- `hewitt sync <session>` imports every session branch as
+  `hewitt/<name>/<branch>`, overwriting earlier imports. A helper container
+  exports a Git bundle and the host fetches it; a bundle carries only objects and
+  refs, never hooks or configuration. `stop` syncs automatically. Fetching into a
+  branch checked out on the host fails; switch away first.
+- The volume survives container crashes, `stop`, and Docker restarts. `rm` syncs
+  first and refuses while any worktree in the volume has uncommitted or
+  untracked files; `rm --force` discards them. Imported branches are kept.
+
+```sh
+hewitt run claude --detach        # session claude-1, branch main in the volume
+hewitt sync claude-1              # Imported hewitt/claude-1/main
+git log hewitt/claude-1/main
+hewitt stop claude-1 && hewitt rm claude-1
+```
+
+### Push over SSH
+
+`--ssh` (or `ssh: true`) forwards the host ssh-agent socket to
+`/hewitt/ssh-agent.sock`, so the agent can `git push` from its volume. Keys stay
+in the host agent: the container can ask it to sign but cannot read them. Every
+key loaded in the agent is usable by the session, so load only the keys it
+should have (or run a separate agent). The image trusts GitHub's published host
+keys (fetched over TLS from `api.github.com/meta` at build time); other hosts
+are accepted on first use. Sessions run as the host UID; when the image has no
+passwd entry for it, `hewitt-agent` supplies one through `nss_wrapper`, which
+ssh requires.
+
+- Linux: `SSH_AUTH_SOCK` must point to a socket when the session starts.
+  Restarting the host agent replaces the socket; start a new session afterwards.
+- macOS (Docker Desktop): Docker Desktop's forwarded socket
+  `/run/host-services/ssh-auth.sock` is used. It is root-owned in some Docker
+  Desktop versions, so a non-root session may get "permission denied".
+- Restricted and hardened sessions refuse `--ssh`: their egress proxy carries
+  only HTTP(S).
+
+### Worktree workspace (legacy)
+
+`--workspace worktree` creates `<data_dir>/worktrees/<random-id>` on a
+`hewitt/<random-id>` branch and mounts the host's shared `.git` read/write. Host
+Git runs hooks and command settings (such as `core.fsmonitor`) from that
+directory, so an agent can make the host run code. It therefore requires
+`--danger host-paths` (or `git: ro`) at the default isolation level.
 
 `--image` overrides the default image; `image` in `hewitt.yml` takes precedence
 over the default for run sessions.
@@ -162,15 +222,14 @@ agent's terminal history. tmux history is held in container memory.
 
 Containers use an init process, open stdin, a TTY, and the label
 `io.hewitt.managed=true`. All Linux capabilities are dropped and
-`no-new-privileges` is enabled. The selected profile, worktree, and shared Git
-directory are mounted read/write. The worktree and Git directory use the same
-absolute paths inside and outside Docker so linked-worktree references work;
-the container starts in the worktree. Images need Git on PATH for Git operations.
-Agents can modify shared repository refs, objects, hooks, and configuration;
-worktrees isolate checkout files, not Git administration. Use repositories you
-trust, without credentials in Git configuration. Hewitt adds no host credential
-imports, Docker socket, published ports, host namespaces, or privileged mode.
-The native client runs as the invoking host UID/GID.
+`no-new-privileges` is enabled. The selected profile and the session volume are
+mounted read/write and the host object directory read-only; the container starts
+in the volume repository. Images need Git and `sh` on PATH: Hewitt runs volume
+helpers (initialize, export, inspect) in short-lived, network-less containers of
+the session image, and once as root with only `CAP_CHOWN` to give a new volume
+to the invoking user. Hewitt adds no host credential imports, Docker socket,
+published ports, host namespaces, or privileged mode. The native client runs as
+the invoking host UID/GID.
 
 The caller owns created containers. Errors during saving, startup, or terminal
 initialization identify the preserved container. Saving failure prevents startup;
@@ -178,11 +237,10 @@ later failures retain metadata. Cancellation interrupts local Docker clients
 without automatic deletion; Docker may already have completed the operation.
 A server initialization failure may leave a running container without an agent.
 Inspect failures before cleanup; `attach` never retries agent startup.
-Worktrees and branches are preserved on container creation, saving, or startup
-failure; errors identify their paths. There is no automatic worktree deletion.
-After stopping and removing the container, inspect the checkout before using
-`git -C /path/to/repo worktree remove /path/to/worktree`. Do not use `--force`
-if you need to preserve local files. Branches remain for committed-work recovery.
+Volumes, worktrees, and branches are preserved on container creation, saving, or
+startup failure; errors identify them. Legacy worktrees are removed by `rm`,
+which refuses uncommitted, untracked, or ignored files. Branches remain for
+committed-work recovery.
 
 ```sh
 docker ps -a --filter label=io.hewitt.managed=true
@@ -201,15 +259,16 @@ Relative paths resolve against the file's directory. Every key is optional.
 agent: claude                    # claude | codex | opencode | pi | antigravity; omit for the agent picker
 image: ghcr.io/hewitt-iso/hewitt:latest
 profile: personal                # shared per agent; default "default"
-name: my-session                 # Docker container name
+name: my-session                 # session (volume, branch namespace) and container name
 mode: new                        # new | exec | sidecar
 # target: py-agent               # existing container, with mode exec or sidecar
 workspace:                       # or just: workspace: copy
-  type: worktree                 # worktree | direct | copy
-  base: main                     # worktree only
+  type: volume                   # volume (default) | worktree | direct | copy
+  base: main                     # volume and worktree
   # paths: [src, docs:ro]        # direct (path[:ro|:rw]) and copy
 workdir: services/py-agent       # inside the workspace (absolute in exec mode)
 git: rw                          # worktree only: rw | ro | none
+ssh: true                        # forward the host ssh-agent for git push
 mounts:
   - ./fixtures:/data:ro          # src[:dst][:ro|:rw], read-only by default
 rules: .hewitt/claude            # default: .hewitt/<agent> if present
@@ -504,9 +563,10 @@ session's agent, and `rm` removes a stopped session and all its resources.
 
 | Command | Capability |
 | --- | --- |
-| `hewitt run [agent]` | Run a workspace container with a persistent terminal and isolated Git worktrees |
+| `hewitt run [agent]` | Run a workspace container with a persistent terminal and a Git repository in a volume |
+| `hewitt sync [session]` | Import a session's branches as `hewitt/<name>/<branch>` |
 | `hewitt stop [session]` | Stop a session and print its full ID |
-| `hewitt rm [session]` | Remove a stopped session, clean up all its worktrees/resources, and print its full ID |
+| `hewitt rm [session]` | Sync, then remove a stopped session and its volume/resources (`--force` discards uncommitted work), and print its full ID |
 | `hewitt logs <session>` | Read session output (not implemented yet) |
 
 `run` and `login` select the `ghcr.io/hewitt-iso/hewitt:latest` image automatically.
