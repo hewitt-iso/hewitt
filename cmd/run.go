@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/hewitt-iso/hewitt/agent"
@@ -30,7 +31,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nAll agents use ghcr.io/hewitt-iso/hewitt:latest by default (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-D to detach; hewitt attach reconnects to the same terminal. Ctrl-C stops the agent.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
+		Long:      short + ".\n\nAll agents use ghcr.io/hewitt-iso/hewitt:latest by default (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B, D to detach; hewitt attach reconnects to the same terminal. Ctrl-C and Ctrl-D are handled by the agent.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
 		Example:   "  hewitt " + exampleAction + " codex --profile personal",
 		ValidArgs: append(slices.Clone(agent.Names), "gemini", "copilot"),
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
@@ -59,7 +60,8 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 					return err
 				}
 				if !start {
-					_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Onboarding complete. Run 'hewitt run' to start a workspace.")
+					_, err := fmt.Fprintf(cmd.ErrOrStderr(), "Onboarding complete. Run %shewitt run%s to start a workspace.\n",
+						ansiBoldCyan, ansiReset)
 					return err
 				}
 			}
@@ -93,6 +95,15 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 }
 
 func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOptions, detach bool) error {
+	if profile.ShouldSyncConfigs(cfg.DataDir) {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			prof := opts.Profile
+			if prof == "" {
+				prof = "default"
+			}
+			_, _ = profile.ImportHostConfigs(cfg.DataDir, homeDir, prof)
+		}
+	}
 	id, err := session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
 	if err != nil {
 		return err
@@ -105,7 +116,7 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 	if opts.Name != "" {
 		reconnect = opts.Name
 	}
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-B, D; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
 		return fmt.Errorf("report session %q (container preserved): %w", id, err)
 	}
 	store, err := session.NewStore(cfg.DataDir)

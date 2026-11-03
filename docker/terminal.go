@@ -5,19 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
 
 const terminalSocket = "/tmp/hewitt-tmux.sock"
 
-// terminalKeys follows docker run -it: Ctrl-C stops the agent in the current
-// window (and ends the session when it was the last window), Ctrl-D detaches
-// this client while agents keep running, and new windows run hewitt-agent to
-// prompt for an agent or shell.
+// terminalKeys configures tmux before any agent starts. Unprefixed keys belong
+// to the native CLI; the standard tmux prefix provides detach/window controls.
 var terminalKeys = []string{
-	"bind-key", "-n", "C-c", "kill-window", ";",
-	"bind-key", "-n", "C-d", "detach-client", ";",
+	"set-option", "-g", "default-terminal", "tmux-256color", ";",
+	"set-option", "-ga", "terminal-overrides", ",*:Tc", ";",
+	"set-option", "-g", "allow-passthrough", "on", ";",
+	"set-option", "-s", "escape-time", "10", ";",
 	"set-option", "-g", "default-command", "hewitt-agent",
 }
 
@@ -59,9 +60,10 @@ func (c Client) StartExternalTerminal(ctx context.Context, id, socket, workdir s
 	}
 	// One tmux command list binds the session keys; the server daemonizes
 	// inside the external container and exits with the agent.
-	args = append(args, "--", id, "tmux", "-f", "/dev/null", "-S", socket, "new-session", "-d", "-s", "hewitt", "--")
+	args = append(args, "--", id, "tmux", "-f", "/dev/null", "-S", socket)
+	args = append(args, terminalKeys...)
+	args = append(args, ";", "new-session", "-d", "-s", "hewitt", "--")
 	args = append(args, command...)
-	args = append(append(args, ";"), terminalKeys...)
 	if _, err := c.execute(ctx, args...); err != nil {
 		return fmt.Errorf("launch agent in external container %q (container untouched; it must contain tmux): %w", id, err)
 	}
@@ -150,7 +152,7 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 	return nil
 }
 
-// AttachTerminal reconnects a client to the existing tmux session. Ctrl-D
+// AttachTerminal reconnects a client to the existing tmux session. Ctrl-B, D
 // detaches only this client, leaving both server and agent running.
 func (c Client) AttachTerminal(ctx context.Context, id string, in io.Reader, out, stderr io.Writer) error {
 	return c.AttachTerminalSocket(ctx, id, terminalSocket, in, out, stderr)
@@ -162,7 +164,11 @@ func (Client) AttachTerminalSocket(ctx context.Context, id, socket string, in io
 	if err := validateSocket(socket); err != nil {
 		return err
 	}
-	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=xterm-256color", "--env", "LANG=C.UTF-8", "--", id,
+	terminal := os.Getenv("TERM")
+	if terminal == "" || terminal == "dumb" {
+		terminal = "xterm-256color"
+	}
+	args := []string{"container", "exec", "--interactive", "--tty", "--env", "TERM=" + terminal, "--env", "LANG=C.UTF-8", "--", id,
 		"tmux", "-u", "-N", "-S", socket, "attach-session", "-t", "=hewitt"}
 	return attach(ctx, id, in, out, stderr, args)
 }
