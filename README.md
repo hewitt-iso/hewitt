@@ -76,11 +76,23 @@ make images  # builds hewitt:local and hewitt/egress:local
 make image-hewitt
 ```
 
+The workspace image builds checksum-pinned tmux 3.8 instead of Bookworm’s
+3.3a so native CLIs can query the attached terminal’s foreground/background
+colors. An image-build PTY test verifies both palette replies; failed palette
+forwarding fails the build. Rebuild the image and start a new session to apply
+this change. Existing containers keep their original tmux binary.
+
 Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand into `<data_dir>/tools`
 (mounted at `/hewitt/tools`) the first time they are selected, so the base image
 stays small and installed CLIs persist across containers. Every new tmux window
 (`Ctrl-B, C`) prompts you to choose an agent (creating a fresh worktree and
 branch `<branch>-2`, `-3`, … for it) or open a shell in the current project directory.
+
+When host config sync is enabled, OpenCode imports include `tui.json`,
+`tui.jsonc`, and custom `themes/`, preserving theme and keybinding preferences.
+Imported tmux styles and keybindings are retained. Terminal fonts remain
+controlled by the host terminal emulator. CLI binaries use the persistent
+Hewitt tools cache; their versions are not automatically matched to host installs.
 
 Log in and run:
 
@@ -89,7 +101,7 @@ Log in and run:
 ./bin/hewitt run --profile personal --repo /path/to/repo
 # Or specify the initial agent directly:
 ./bin/hewitt run codex --profile personal --repo /path/to/repo
-# Detach with Ctrl-D, then reconnect:
+# Detach with Ctrl-B, D, then reconnect:
 ./bin/hewitt ps
 ./bin/hewitt attach <full-session-id>
 
@@ -369,10 +381,12 @@ unambiguous hex ID prefix, or session name (or opens an interactive selector
 when `<session>` is omitted on an interactive terminal), and connects to the existing tmux
 session using `docker container exec --interactive --tty`. Docker handles
 terminal mode and resizing; Hewitt restores terminal settings after
-cancellation. Attachment uses the `xterm-256color` terminal type.
+cancellation. Attachment preserves the host `TERM` (falling back to
+`xterm-256color` when unset or `dumb`); panes use `tmux-256color`. Custom
+images must provide the corresponding terminfo entries.
 
 Press **Ctrl-B, D** to detach and leave the agent running. Ctrl-C may interrupt
-the agent. Use tmux copy mode (**Ctrl-B, [**) to inspect scrollback. Each reconnect
+the agent; Ctrl-D is also passed through to the CLI. Use tmux copy mode (**Ctrl-B, [**) to inspect scrollback. Each reconnect
 attaches to the same terminal, including its final screen after the agent exits.
 Attachment never starts stopped containers, creates terminals, launches agents,
 or changes metadata. Removed or unavailable containers produce Docker errors.
