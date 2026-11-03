@@ -27,7 +27,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use: action + " <agent>", Short: short,
-		Long:      short + ".\n\nClaude and Codex select their GHCR images automatically; OpenCode requires an explicit image (FROM applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B then D to detach; hewitt attach reconnects to the same terminal.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
+		Long:      short + ".\n\nClaude and Codex select their GHCR images automatically; OpenCode requires an explicit image (FROM applies to run only).\nSupported adapters: claude, codex, opencode. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-D to detach; hewitt attach reconnects to the same terminal. Ctrl-C stops the agent.\nRun creates an isolated worktree and branch; mounts include shared Git metadata.",
 		Example:   "  hewitt " + exampleAction + " codex --profile personal",
 		ValidArgs: []string{"claude", "codex", "opencode", "gemini", "copilot"},
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
@@ -58,7 +58,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-B then D; reconnect with hewitt attach %s\n", id, id); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-D, stop with Ctrl-C; reconnect with hewitt attach %s\n", id, id); err != nil {
 				return fmt.Errorf("report session %q (container preserved): %w", id, err)
 			}
 			store, err := session.NewStore(cfg.DataDir)

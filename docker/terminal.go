@@ -11,6 +11,13 @@ import (
 
 const terminalSocket = "/tmp/hewitt-tmux.sock"
 
+// terminalKeys follows docker run -it: Ctrl-C stops the agent (tmux sends it
+// SIGHUP and ends the session, so attached clients return to the host shell),
+// and Ctrl-D detaches this client while the agent keeps running. Without
+// remain-on-exit, an exiting agent also ends the session instead of leaving a
+// dead pane.
+var terminalKeys = []string{"bind-key", "-n", "C-c", "kill-session", ";", "bind-key", "-n", "C-d", "detach-client"}
+
 // TerminalServerArgs runs the server in the foreground as the container process.
 // No user configuration is loaded, and no client owns the server's lifetime.
 func TerminalServerArgs() []string {
@@ -47,11 +54,11 @@ func (c Client) StartExternalTerminal(ctx context.Context, id, socket, workdir s
 		}
 		args = append(args, "--workdir", workdir)
 	}
-	// One tmux command list sets remain-on-exit before an exiting agent can
-	// destroy its pane. The server daemonizes inside the external container.
+	// One tmux command list binds the session keys; the server daemonizes
+	// inside the external container and exits with the agent.
 	args = append(args, "--", id, "tmux", "-f", "/dev/null", "-S", socket, "new-session", "-d", "-s", "hewitt", "--")
 	args = append(args, command...)
-	args = append(args, ";", "set-option", "-t", "=hewitt", "remain-on-exit", "on")
+	args = append(append(args, ";"), terminalKeys...)
 	if _, err := c.execute(ctx, args...); err != nil {
 		return fmt.Errorf("launch agent in external container %q (container untouched; it must contain tmux): %w", id, err)
 	}
@@ -97,8 +104,9 @@ func validateSocket(socket string) error {
 }
 
 // StartTerminal launches the agent once, after the foreground server is ready.
-// The final screen remains available when the agent exits. Failure preserves the
-// container; reconnecting never launches a second agent.
+// When the agent exits, the session and the foreground server end, stopping the
+// container. Failure preserves the container; reconnecting never launches a
+// second agent.
 func (c Client) StartTerminal(ctx context.Context, id string, command []string) error {
 	if err := validateArgument("container ID or name", id); err != nil {
 		return err
@@ -119,7 +127,7 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	if _, err := c.execute(ctx, terminalExec(id, "set-option", "-g", "remain-on-exit", "on")...); err != nil {
+	if _, err := c.execute(ctx, terminalExec(id, terminalKeys...)...); err != nil {
 		return fmt.Errorf("configure terminal in container %q (container preserved): %w", id, err)
 	}
 	args := terminalExec(id, "new-session", "-d", "-s", "hewitt", "--")
@@ -130,7 +138,7 @@ func (c Client) StartTerminal(ctx context.Context, id string, command []string) 
 	return nil
 }
 
-// AttachTerminal reconnects a client to the existing tmux session. Ctrl-B, D
+// AttachTerminal reconnects a client to the existing tmux session. Ctrl-D
 // detaches only this client, leaving both server and agent running.
 func (c Client) AttachTerminal(ctx context.Context, id string, in io.Reader, out, stderr io.Writer) error {
 	return c.AttachTerminalSocket(ctx, id, terminalSocket, in, out, stderr)
