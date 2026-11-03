@@ -87,11 +87,28 @@ func resolveOrPickSession(cmd *cobra.Command, store *session.Store, args []strin
 }
 
 func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, prompt string) (string, error) {
+	options := make([]string, len(candidates))
+	for i, c := range candidates {
+		name := c.meta.Name
+		if name == "" {
+			name = "-"
+		}
+		options[i] = fmt.Sprintf("%s  %-8s  %-16s  %-8s  %s",
+			shortID(c.meta.ID), c.meta.Agent, name, c.status, c.meta.CreatedAt.UTC().Format(time.RFC3339))
+	}
+	idx, err := pickOption(in, stderr, prompt, options, "session selection cancelled", "write session picker")
+	if err != nil {
+		return "", err
+	}
+	return candidates[idx].meta.ID, nil
+}
+
+func pickOption(in io.Reader, stderr io.Writer, prompt string, options []string, cancelMsg, errPrefix string) (int, error) {
 	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		fd := int(f.Fd())
 		state, err := term.MakeRaw(fd)
 		if err != nil {
-			return "", fmt.Errorf("prepare terminal for selection: %w", err)
+			return 0, fmt.Errorf("prepare terminal for selection: %w", err)
 		}
 		defer term.Restore(fd, state)
 	}
@@ -99,24 +116,19 @@ func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, 
 	selected := 0
 	render := func(redraw bool) error {
 		if redraw {
-			if _, err := fmt.Fprintf(stderr, "\x1b[%dA\r\x1b[J", len(candidates)+1); err != nil {
+			if _, err := fmt.Fprintf(stderr, "\x1b[%dA\r\x1b[J", len(options)+1); err != nil {
 				return err
 			}
 		}
 		if _, err := fmt.Fprintf(stderr, "%s (↑/↓ or j/k to move, enter to select, q to cancel):\r\n", prompt); err != nil {
 			return err
 		}
-		for i, c := range candidates {
+		for i, opt := range options {
 			cursor := " "
 			if i == selected {
 				cursor = ">"
 			}
-			name := c.meta.Name
-			if name == "" {
-				name = "-"
-			}
-			if _, err := fmt.Fprintf(stderr, "%s %d) %s  %-8s  %-16s  %-8s  %s\r\n",
-				cursor, i+1, shortID(c.meta.ID), c.meta.Agent, name, c.status, c.meta.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+			if _, err := fmt.Fprintf(stderr, "%s %d) %s\r\n", cursor, i+1, opt); err != nil {
 				return err
 			}
 		}
@@ -124,7 +136,7 @@ func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, 
 	}
 
 	if err := render(false); err != nil {
-		return "", fmt.Errorf("write session picker: %w", err)
+		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
 	var buf [3]byte
@@ -132,40 +144,39 @@ func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, 
 		n, err := in.Read(buf[:1])
 		if n == 0 {
 			if err != nil {
-				return "", fmt.Errorf("session selection cancelled")
+				return 0, fmt.Errorf("%s", cancelMsg)
 			}
 			continue
 		}
 		b := buf[0]
 		switch {
 		case b == '\r' || b == '\n':
-			return candidates[selected].meta.ID, nil
+			return selected, nil
 		case b == 'q' || b == 'Q' || b == 3 || b == 4:
-			return "", fmt.Errorf("session selection cancelled")
+			return 0, fmt.Errorf("%s", cancelMsg)
 		case b == 'k' || b == 'K':
 			if selected > 0 {
 				selected--
 				if err := render(true); err != nil {
-					return "", fmt.Errorf("write session picker: %w", err)
+					return 0, fmt.Errorf("%s: %w", errPrefix, err)
 				}
 			}
 		case b == 'j' || b == 'J':
-			if selected < len(candidates)-1 {
+			if selected < len(options)-1 {
 				selected++
 				if err := render(true); err != nil {
-					return "", fmt.Errorf("write session picker: %w", err)
+					return 0, fmt.Errorf("%s: %w", errPrefix, err)
 				}
 			}
 		case b >= '1' && b <= '9':
 			idx := int(b - '1')
-			if idx < len(candidates) {
+			if idx < len(options) {
 				selected = idx
 				if err := render(true); err != nil {
-					return "", fmt.Errorf("write session picker: %w", err)
+					return 0, fmt.Errorf("%s: %w", errPrefix, err)
 				}
 			}
 		case b == 0x1b:
-			// Read optional ANSI escape sequence for arrow keys.
 			n, _ := in.Read(buf[1:3])
 			if n == 2 && buf[1] == '[' {
 				switch buf[2] {
@@ -173,20 +184,20 @@ func pickSession(in io.Reader, stderr io.Writer, candidates []sessionCandidate, 
 					if selected > 0 {
 						selected--
 						if err := render(true); err != nil {
-							return "", fmt.Errorf("write session picker: %w", err)
+							return 0, fmt.Errorf("%s: %w", errPrefix, err)
 						}
 					}
 				case 'B':
-					if selected < len(candidates)-1 {
+					if selected < len(options)-1 {
 						selected++
 						if err := render(true); err != nil {
-							return "", fmt.Errorf("write session picker: %w", err)
+							return 0, fmt.Errorf("%s: %w", errPrefix, err)
 						}
 					}
 				}
 				continue
 			}
-			return "", fmt.Errorf("session selection cancelled")
+			return 0, fmt.Errorf("%s", cancelMsg)
 		}
 	}
 }

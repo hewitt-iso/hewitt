@@ -2,7 +2,11 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/hewitt-iso/hewitt/config"
+	"github.com/hewitt-iso/hewitt/profile"
+	"github.com/hewitt-iso/hewitt/session"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +32,18 @@ func NewRootCommand(version string) *cobra.Command {
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
+				opts := session.AgentOptions{DataDir: cfg.DataDir, Repository: "."}
+				start, err := runOnboarding(cmd, &cfg, &opts)
+				if err != nil {
+					return err
+				}
+				if !start {
+					_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Onboarding complete. Run 'hewitt run' to start a workspace.")
+					return err
+				}
+				return executeRun(cmd, &cfg, opts, false)
+			}
 			return cmd.Help()
 		},
 	}
