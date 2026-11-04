@@ -145,21 +145,15 @@ create_worktree_if_needed() {
 		return 0
 	fi
 	local wt_path branch base="${HEWITT_BASE:-HEAD}"
-	if [ -n "${HEWITT_BRANCH:-}" ]; then
-		# Volume workspace: readable sequential names; hewitt sync imports
-		# them as hewitt/<session>/<branch>-<n>.
-		local n=2
-		while [ -e "$HEWITT_REPO-$n" ] || git -C "$HEWITT_REPO" show-ref --verify --quiet "refs/heads/$HEWITT_BRANCH-$n"; do
-			n=$((n + 1))
-		done
-		wt_path="$HEWITT_REPO-$n"
-		branch="$HEWITT_BRANCH-$n"
-	else
-		local token
-		token="$(head -c 10 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-		wt_path="$HEWITT_WORKTREES_DIR/$token"
-		branch="hewitt/$token"
-	fi
+	local label="${choice:-agent}" n=1
+	while :; do
+		branch="$label-$n"
+		wt_path="$HEWITT_WORKTREES_DIR/$branch"
+		if [ ! -e "$wt_path" ] && ! git -C "$HEWITT_REPO" show-ref --verify --quiet "refs/heads/$branch"; then
+			break
+		fi
+		n=$((n + 1))
+	done
 	mkdir -p "$HEWITT_WORKTREES_DIR"
 	git -C "$HEWITT_REPO" worktree add -b "$branch" -- "$wt_path" "$base" >&2
 	local target="$wt_path"
@@ -361,7 +355,7 @@ pick_interactive() {
 	local dir_name
 	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
 	local names=("claude" "codex" "opencode" "pi" "antigravity" "shell")
-	local descs=("new worktree" "new worktree" "new worktree" "new worktree" "new worktree" "$dir_name")
+	local descs=("new branch" "new branch" "new branch" "new branch" "new branch" "$dir_name")
 	local selected=0
 	local count=${#names[@]}
 	local total_lines=$((count + 1))
@@ -483,7 +477,7 @@ run)
 	fi
 	create_worktree_if_needed
 	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
-		tmux rename-window "$choice:$(basename "$PWD")" 2>/dev/null || true
+		tmux rename-window "$choice:${HEWITT_PROJECT_NAME:-$(basename "$HEWITT_REPO")}" 2>/dev/null || true
 	fi
 	exec_agent "$choice"
 	;;
@@ -494,7 +488,7 @@ run)
 	fi
 	create_worktree_if_needed
 	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
-		tmux rename-window "$choice:$(basename "$PWD")" 2>/dev/null || true
+		tmux rename-window "$choice:${HEWITT_PROJECT_NAME:-$(basename "$HEWITT_REPO")}" 2>/dev/null || true
 	fi
 	exec_agent "$choice"
 	;;
