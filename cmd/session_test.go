@@ -127,8 +127,14 @@ func executeCommand(t *testing.T, args ...string) (string, error) {
 	root.SetErr(&stderr)
 	root.SetArgs(args)
 	err := root.Execute()
-	if stderr.Len() != 0 {
-		t.Errorf("command printed diagnostics instead of returning them: %q", stderr.String())
+	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+		if len(args) > 0 && args[0] == "run" && strings.HasPrefix(line, "[hewitt] ") {
+			continue
+		}
+		if line != "" {
+			t.Errorf("command printed diagnostics instead of returning them: %q", stderr.String())
+			break
+		}
 	}
 	return stdout.String(), err
 }

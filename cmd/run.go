@@ -78,7 +78,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	}
 	cmd.Args = cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs)
 	cmd.Use = "run [agent]"
-	cmd.Example = "  hewitt run                       # interactive agent picker in workspace container\n" +
+	cmd.Example = "  hewitt run                       # select an agent, then prepare the workspace\n" +
 		"  hewitt run codex --profile personal\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
@@ -99,7 +99,21 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 }
 
 func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOptions, detach bool) error {
+	if opts.Agent == "" && !opts.Shell && !detach && isInteractive(cmd) {
+		choice, err := pickAgent(cmd.InOrStdin(), cmd.ErrOrStderr())
+		if err != nil {
+			return err
+		}
+		if choice == "shell" {
+			opts.Shell = true
+		} else {
+			opts.Agent = choice
+		}
+	}
 	if profile.ShouldSyncConfigs(cfg.DataDir) {
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "[hewitt] Syncing host configuration..."); err != nil {
+			return fmt.Errorf("report configuration sync: %w", err)
+		}
 		if homeDir, err := os.UserHomeDir(); err == nil {
 			prof := opts.Profile
 			if prof == "" {

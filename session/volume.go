@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -85,7 +86,7 @@ func helper(ctx context.Context, image string, v workspace.Volume, script string
 
 // createVolume creates and initializes the session repository at the base.
 // On failure the volume is kept and named so it can be inspected.
-func createVolume(ctx context.Context, image string, v workspace.Volume) error {
+func createVolume(ctx context.Context, image string, v workspace.Volume, stderr io.Writer) error {
 	client := docker.Client{}
 	exists, err := client.VolumeExists(ctx, v.Volume)
 	if err != nil {
@@ -93,6 +94,9 @@ func createVolume(ctx context.Context, image string, v workspace.Volume) error {
 	}
 	if exists {
 		return fmt.Errorf("volume %q already exists; remove it or choose another --name", v.Volume)
+	}
+	if err := reportStep(stderr, "Creating workspace volume"); err != nil {
+		return err
 	}
 	if err := client.CreateVolume(ctx, v.Volume); err != nil {
 		return err
@@ -102,8 +106,14 @@ func createVolume(ctx context.Context, image string, v workspace.Volume) error {
 		Image: image, Entrypoint: "sh", Command: []string{"-c", chownScript, "sh", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), volumeRoot},
 		User: "0:0", CapAdd: []string{"CHOWN"}, Volumes: volumes, Network: "none", ReadOnlyRoot: true, DisableLogs: true, DisableTTY: true,
 	}
+	if err := reportStep(stderr, "Preparing volume permissions (pulling the image if needed)"); err != nil {
+		return err
+	}
 	if err := client.Run(ctx, owner, &bytes.Buffer{}); err != nil {
 		return fmt.Errorf("prepare volume %q (preserved): %w", v.Volume, err)
+	}
+	if err := reportStep(stderr, "Initializing workspace repository"); err != nil {
+		return err
 	}
 	if err := helper(ctx, image, v, initScript, nil, v.Path, v.Branch, v.Base, sourceObjects, v.Origin, v.UserName, v.UserEmail); err != nil {
 		return fmt.Errorf("initialize repository in volume %q (preserved): %w", v.Volume, err)

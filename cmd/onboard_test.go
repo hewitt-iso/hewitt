@@ -66,7 +66,7 @@ esac
 	stdout.Reset()
 	stderr.Reset()
 	root = NewRootCommand("test")
-	root.SetIn(fakeTTYReader{strings.NewReader("\n\n\n")})
+	root.SetIn(fakeTTYReader{strings.NewReader("\n\n\n\n")})
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	if err := root.Execute(); err != nil {
@@ -115,13 +115,13 @@ esac
 	stdout.Reset()
 	stderr.Reset()
 	root = NewRootCommand("test")
-	root.SetIn(fakeTTYReader{strings.NewReader("")})
+	root.SetIn(fakeTTYReader{strings.NewReader("2\n")})
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stderr.String(), "[1/3]") || !strings.Contains(stdout.String(), "Usage:") {
+	if strings.Contains(stderr.String(), "[1/3]") || !strings.Contains(stderr.String(), "Select agent") || stdout.String() != "workspace opened" {
 		t.Fatalf("second run re-triggered onboarding: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

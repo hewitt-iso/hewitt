@@ -74,12 +74,24 @@ func TestSharedWorkspaceLifecycle(t *testing.T) {
 				t.Errorf("%s: %v: %s", name, err, diagnostic.String())
 				return
 			}
+			position := 0
+			for _, step := range []string{"Checking " + name + " installation", "Preparing " + name + " profile", "Launching " + name} {
+				offset := strings.Index(diagnostic.String()[position:], step)
+				if offset < 0 {
+					t.Errorf("%s: missing or out-of-order progress %q: %s", name, step, diagnostic.String())
+					break
+				}
+				position += offset + len(step)
+			}
 			if !strings.Contains(out.String(), name+"-1") {
 				t.Errorf("%s output: %s", name, out.String())
 			}
 		}(name)
 	}
 	wg.Wait()
+	if runs, err := store.RunningAgents(); err != nil || len(runs) != 0 {
+		t.Fatalf("finished agents remain tracked: %v %v", runs, err)
+	}
 	opts.Shell = true
 	var out, diagnostic bytes.Buffer
 	if err := OpenWorkspace(ctx, store, id, opts, strings.NewReader("printf 'shell-ok\\n'\nexit\n"), &out, &diagnostic); err != nil {

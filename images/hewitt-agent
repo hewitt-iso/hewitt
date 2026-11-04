@@ -171,7 +171,9 @@ create_worktree_if_needed() {
 exec_agent() {
 	local agent="$1"
 	shift
+	printf '[hewitt] Checking %s installation...\n' "$agent" >&2
 	ensure_agent "$agent"
+	printf '[hewitt] Preparing %s profile...\n' "$agent" >&2
 	local profile_root="${HEWITT_PROFILES_DIR:-/hewitt/profiles}/$agent"
 	if [ ! -d "$profile_root" ] && [ -d "/hewitt/profile" ]; then
 		profile_root="/hewitt/profile"
@@ -200,6 +202,7 @@ exec_agent() {
 		done
 	fi
 
+	printf '[hewitt] Launching %s...\n' "$agent" >&2
 	case "$agent" in
 	claude)
 		export CLAUDE_CONFIG_DIR="$profile_root/claude"

@@ -18,7 +18,9 @@ do not make separate API credits a prerequisite.
   session lookup for attachment. Default volume runs reuse workspace containers
   with matching settings and open fresh foreground agent processes through exec;
   host terminals own connection persistence. Workspace metadata owns the container
-  and volume, not individual processes. Legacy tmux sessions remain attachable;
+  and volume, not individual processes. Live foreground connections have private
+  run records held live by kernel locks, with optional host tmux pane locations;
+  attachment selects these runs without starting agents. Legacy tmux sessions remain attachable;
   reconnecting to them must not launch another agent. Preserve legacy Docker attachment
   for records without a terminal marker.
   Save metadata before startup; preserve and identify containers if saving fails.
@@ -26,6 +28,8 @@ do not make separate API credits a prerequisite.
   Git workspaces and persist their locations before container startup. Native agent invocation and
   profile preparation already live in `agent` and `profile`. Add packages only with working behavior; do not create empty
   packages or speculative interfaces.
+- `terminal`: locate and focus existing host tmux panes or attach to their host
+  sessions. Never create panes or agent processes during attachment.
 - `workspace`: host-side Git for session workspaces: volume preparation (base
   anchor, identity, credential-free origin) and bundle import into
   `hewitt/<name>/*`; legacy worktree creation and safe removal that refuses
