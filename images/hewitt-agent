@@ -321,6 +321,16 @@ if [ -f "$profile_home/.gitconfig" ]; then
 	export GIT_CONFIG_GLOBAL="$profile_home/.gitconfig"
 fi
 
+
+detach() {
+	if [ -z "\$TMUX" ]; then
+		printf 'hewitt: no tmux session to detach\n' >&2
+		return 1
+	fi
+	command tmux detach-client
+}
+printf 'hewitt: type detach to return to the host (session stays running); exit or Ctrl-D closes this shell. Ctrl-C cancels the current command.\n'
+
 cd() {
 	local target="\${1:-\$HEWITT_PROJECT_ROOT}"
 	if [ "\$target" = "-" ]; then
