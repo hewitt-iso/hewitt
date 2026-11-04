@@ -37,7 +37,7 @@ if [ "$1 $2" = "volume inspect" ]; then printf 'Error: No such volume\n' >&2; ex
 case "$2" in
 create) printf '%s\n' '` + containerID + `' ;;
 exec) case "$*" in
- *attach-session*) printf 'workspace attached' ;;
+ *'hewitt-agent run'*) printf 'workspace opened' ;;
 esac ;;
 esac
 `
@@ -75,8 +75,8 @@ esac
 	if !profile.IsOnboarded(dataDir) {
 		t.Fatal("expected dataDir to be marked onboarded")
 	}
-	if stdout.String() != "workspace attached" {
-		t.Fatalf("stdout = %q, want workspace attached", stdout.String())
+	if stdout.String() != "workspace opened" {
+		t.Fatalf("stdout = %q, want workspace opened", stdout.String())
 	}
 	for _, want := range []string{
 		"[1/3] Import configs",

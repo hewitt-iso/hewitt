@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '17 */6 * * *'
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to publish (use a preview tag for unmerged branches)
+        required: true
+        default: latest
+        type: string
 
 permissions:
   contents: read
@@ -21,6 +27,7 @@ jobs:
     env:
       IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
       IMAGE_BUILD_FLAGS: --pull --no-cache
+      IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,7 +48,7 @@ jobs:
       - name: Test container and terminal lifecycle
         env:
           HEWITT_TEST_IMAGE: hewitt:local
-        run: go test -tags=integration ./docker -run 'TestContainerLifecycle|TestPersistentTerminal' -count=1 -v
+        run: go test -tags=integration ./docker ./session -run 'TestContainerLifecycle|TestPersistentTerminal|TestSharedWorkspaceLifecycle' -count=1 -v
       - name: Log in to GHCR
         # Publishing runs only after both CLI and lifecycle checks succeed.
         env:

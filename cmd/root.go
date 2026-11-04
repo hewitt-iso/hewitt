@@ -51,7 +51,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd.SetVersionTemplate("hewitt {{.Version}}\n")
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "configuration file (default: OS user config directory/hewitt/config.json)")
 	cmd.AddCommand(newSessionCommands(&cfg)...)
-	cmd.AddCommand(newAgentCommand("run", &cfg), newAgentCommand("login", &cfg))
+	cmd.AddCommand(newShellCommand(&cfg), newAgentCommand("run", &cfg), newAgentCommand("login", &cfg))
 	auth := &cobra.Command{Use: "auth", Short: "Manage native agent authentication", Args: cobra.NoArgs}
 	auth.AddCommand(newAgentCommand("login", &cfg), newAgentCommand("status", &cfg), newAgentCommand("logout", &cfg))
 	cmd.AddCommand(auth, newPSCommand(&cfg), newAttachCommand(&cfg))

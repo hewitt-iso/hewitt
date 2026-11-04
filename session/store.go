@@ -25,10 +25,12 @@ import (
 // IDs are full Docker container IDs until sessions have independent resources.
 // Credentials and agent input must never be stored here.
 type Metadata struct {
-	Workspace *workspace.Worktree `json:"workspace,omitempty"`
-	Copy      *workspace.Copy     `json:"copy,omitempty"`
-	Volume    *workspace.Volume   `json:"volume,omitempty"`
-	Egress    *Egress             `json:"egress,omitempty"`
+	// WorkspaceKey identifies compatible host-terminal workspace containers.
+	WorkspaceKey string              `json:"workspace_key,omitempty"`
+	Workspace    *workspace.Worktree `json:"workspace,omitempty"`
+	Copy         *workspace.Copy     `json:"copy,omitempty"`
+	Volume       *workspace.Volume   `json:"volume,omitempty"`
+	Egress       *Egress             `json:"egress,omitempty"`
 	// Mode is empty for sessions created before launch modes existed (new).
 	// Container is the external target of exec and sidecar sessions; exec
 	// sessions use a random ID and their own terminal Socket.
@@ -312,8 +314,11 @@ func (m Metadata) validate() error {
 	if m.Mode == "exec" && (m.Terminal != "tmux" || !strings.HasPrefix(m.Socket, "/tmp/hewitt-")) {
 		return fmt.Errorf("exec sessions require a tmux terminal socket")
 	}
-	if m.Terminal != "" && m.Terminal != "tmux" {
+	if m.Terminal != "" && m.Terminal != "tmux" && m.Terminal != "host" {
 		return fmt.Errorf("unsupported session terminal %q", m.Terminal)
+	}
+	if m.Terminal == "host" && (m.Volume == nil || m.Mode != "new" || m.Agent != "workspace" || validateID(m.WorkspaceKey) != nil) {
+		return fmt.Errorf("host terminals require a managed volume workspace")
 	}
 	if m.Profile != "" {
 		if err := profile.ValidateID(m.Profile); err != nil {

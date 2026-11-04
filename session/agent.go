@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -20,7 +21,8 @@ import (
 )
 
 // AgentOptions describes one native client invocation. Run images must contain
-// tmux, env, and the selected CLI on PATH and support execution as the invoking host user's UID/GID.
+// Git, sh, sleep, and hewitt-agent on PATH for volume runs; legacy modes also
+// require tmux. Images must support execution as the invoking host UID/GID.
 // Empty run settings fall back to hewitt.yml, then to defaults.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
@@ -32,9 +34,13 @@ type AgentOptions struct {
 	Danger               []string
 	// SSH forwards the host ssh-agent; hewitt.yml ssh: true does the same.
 	SSH bool
+	// Separate creates another workspace container instead of reusing one.
+	Separate bool
+	Shell    bool
 }
 
-// RunAgent starts a detached native agent in a persistent terminal. Effective
+// RunAgent prepares a shared workspace container for volume runs, or starts a
+// legacy persistent terminal for other modes. Effective
 // settings are reported to stderr. External containers are never managed.
 func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -43,6 +49,33 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	s, err := mergeSettings(opts)
 	if err != nil {
 		return "", err
+	}
+	if s.Agent != "workspace" {
+		if _, err := agent.Lookup(s.Agent); err != nil {
+			return "", err
+		}
+	}
+	if s.Mode != "exec" {
+		if err := (docker.CreateOptions{Image: s.Image, Name: s.Name}).Validate(); err != nil {
+			return "", err
+		}
+		if err := profile.ValidateID(s.Profile); err != nil {
+			return "", err
+		}
+	}
+	if (opts.Shell || opts.Separate) && (s.Mode != "new" || s.Workspace != "volume") {
+		return "", fmt.Errorf("shell and --separate require the managed volume workspace in new mode")
+	}
+	key := ""
+	if s.Mode == "new" && s.Workspace == "volume" {
+		var unlock func()
+		key, unlock, err = lockWorkspace(ctx, opts.DataDir, s)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+		// All agent profiles and egress hosts belong to the workspace.
+		s.Agent = "workspace"
 	}
 	if s.Mode == "exec" {
 		return runExternal(ctx, opts.DataDir, s, stderr)
@@ -59,9 +92,32 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", err
 	}
+	if key != "" {
+		for _, name := range agent.Names {
+			a, _ := agent.Lookup(name)
+			mounts, err := s.hostMounts(a)
+			if err != nil {
+				return "", err
+			}
+			for _, mount := range mounts[len(s.mounts):] {
+				mount.Target = strings.Replace(mount.Target, agent.ProfilePath, "/hewitt/profiles/"+name, 1)
+				extra = append(extra, mount)
+			}
+		}
+	}
 	envFile, envKeys, err := s.envFile()
 	if err != nil {
 		return "", err
+	}
+	if key != "" {
+		// Reuse only after validating host mounts and the credential env file.
+		if !opts.Separate {
+			if id, err := reuseWorkspace(ctx, opts.DataDir, key, stderr); id != "" || err != nil {
+				return id, err
+			}
+		} else {
+			key = fmt.Sprintf("%x", sha256.Sum256([]byte(key+rand.Text())))
+		}
 	}
 	var direct []docker.BindMount
 	var root string
@@ -84,7 +140,10 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", err
 	}
-	m := Metadata{Agent: s.Agent, Image: s.Image, Name: s.Name, Profile: s.Profile, Operation: "run", Terminal: "tmux", Mode: s.Mode, Isolation: s.Isolation}
+	m := Metadata{Agent: s.Agent, Image: s.Image, Name: s.Name, Profile: s.Profile, Operation: "run", Terminal: "tmux", Mode: s.Mode, Isolation: s.Isolation, WorkspaceKey: key}
+	if key != "" {
+		m.Terminal = "host"
+	}
 	if s.Mode == "sidecar" {
 		m.Container = s.Target
 	}
@@ -129,8 +188,10 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 			"HEWITT_WORKTREES_DIR="+volumeRoot,
 			"HEWITT_BRANCH="+v.Branch,
 			"HEWITT_BASE="+v.Branch,
-			"HEWITT_INITIAL_WORKTREE_READY=1",
 		)
+		if key == "" {
+			create.Env = append(create.Env, "HEWITT_INITIAL_WORKTREE_READY=1")
+		}
 		if s.Workdir != "" {
 			create.Env = append(create.Env, "HEWITT_SUBDIR="+s.Workdir)
 		}
@@ -221,8 +282,15 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	create.Workdir = filepath.Join(root, s.Workdir)
 	create.Mounts = append(create.Mounts, extra...)
 	command := append([]string{create.Entrypoint}, create.Command...)
-	create.Entrypoint = "tmux"
-	create.Command = docker.TerminalServerArgs()
+	if key != "" {
+		create.Entrypoint = "sleep"
+		create.Command = []string{"infinity"}
+		create.DisableTTY = true
+		create.Env = append(create.Env, "HEWITT_HOST_TERMINAL=1")
+	} else {
+		create.Entrypoint = "tmux"
+		create.Command = docker.TerminalServerArgs()
+	}
 	if _, err := io.WriteString(stderr, s.describe(create)); err != nil {
 		return "", fmt.Errorf("report settings (%s): %w", preserved, err)
 	}
@@ -238,8 +306,10 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err := (docker.Client{}).Start(ctx, metadata.ID); err != nil {
 		return "", fmt.Errorf("%s: %w", preserved, err)
 	}
-	if err := (docker.Client{}).StartTerminal(ctx, metadata.ID, command); err != nil {
-		return "", fmt.Errorf("%s: %w", preserved, err)
+	if key == "" {
+		if err := (docker.Client{}).StartTerminal(ctx, metadata.ID, command); err != nil {
+			return "", fmt.Errorf("%s: %w", preserved, err)
+		}
 	}
 	return metadata.ID, nil
 }
