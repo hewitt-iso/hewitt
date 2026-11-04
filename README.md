@@ -77,9 +77,14 @@ The default version is `dev`. Without Make, use `go build -o bin/hewitt .` or
 
 - `ghcr.io/hewitt-iso/hewitt:latest`
 
-Docker pulls a missing image on first use. Once cached, Docker uses the local
-copy; use `docker pull IMAGE` to update it. Published images must be public for
-users to pull them without a registry login.
+Docker pulls a missing image on first use. For the default image, each `run`
+and `login` also checks the registry for a newer `latest` and pulls it; offline,
+Hewitt warns and keeps the local copy. A locally built image with the same tag
+(no registry digest) and any custom `--image` are never pulled over. An idle
+workspace whose container was created from an older image gets a new container
+on the next `run`; its volume, branches, and commits are kept. A workspace with
+connected agents keeps its container until they exit. Published images must be
+public for users to pull them without a registry login.
 
 To build locally instead (requires Docker and network access):
 
@@ -102,7 +107,8 @@ hewitt shell              # another connection: shell in the base checkout
 
 Use your host tmux's prefix and detach keys as usual. `exit` or Ctrl-D closes
 a shell; Ctrl-C cancels its current command. Exiting one process leaves the
-workspace container and other agents running. Without host tmux, a lost terminal
+workspace container and other agents running. Outside tmux, `run` warns that the
+agent cannot be reattached. Without host tmux, a lost terminal
 connection cannot be reattached by Hewitt; use native agent conversation resume
 where supported. `hewitt attach` can return to individual agent panes when their
 launching host tmux connection still exists. Old host worktrees are preserved.
@@ -364,14 +370,9 @@ are periodic rebuilds rather than instant upstream-release notifications.
 For the existing packages, grant this repository Actions write access in each
 package's settings if it was not inherited through the source repository link.
 
-Publishing an update does not change running containers. Users should pull the
-updated image and start a new Hewitt session; existing sessions keep their
-original containers:
-
-```sh
-docker pull ghcr.io/hewitt-iso/hewitt-codex:latest
-docker pull ghcr.io/hewitt-iso/hewitt-claude:latest
-```
+Publishing an update does not change running containers. The next `hewitt run`
+pulls it and replaces idle workspace containers; legacy sessions keep their
+original containers.
 
 For a fresh local rebuild, use
 `make images IMAGE_BUILD_FLAGS="--pull --no-cache"`.
@@ -392,9 +393,10 @@ settings after the first push to enable anonymous pulls.
 `ps` lists saved sessions from the configured `data_dir`, ordered by session
 ID. By default, stopped sessions are omitted; pass `-a` (`--all`) to include
 stopped sessions. The table includes `ID` (12-character short ID by default, or
-the full 64-character ID with `--no-trunc`), `AGENT`,
-`IMAGE`, `NAME` (`-` when not supplied), `STATUS` (`running`, `stopped`, or
-`unknown`), and `CREATED` (a UTC RFC 3339 timestamp). An empty or missing store
+the full 64-character ID with `--no-trunc`), `AGENT` (for shared workspaces,
+the connected agents, or `-`),
+`IMAGE`, `NAME` (`-` when not supplied), `STATUS` (`running`, `idle` for a
+running shared workspace with no connected agent, `stopped`, or `unknown`), and `CREATED` (a UTC RFC 3339 timestamp). An empty or missing store
 prints only the header and creates no files or directories. Invalid or
 unreadable records fail the command without printing a partial list.
 
@@ -426,7 +428,14 @@ Outside tmux, it attaches to that pane's existing host session. Another tmux
 server is refused to avoid changing an unrelated client's terminal. No pane,
 agent, or container is created by attachment. Runs opened in plain terminals
 are shown with a limitation label; selecting one explains that raw Docker exec
-terminals cannot be reattached. Use host tmux for reconnectable launches.
+terminals cannot be reattached. Use host tmux for reconnectable launches. When
+nothing can be attached, the error names idle workspaces and how to open an agent.
+
+## Errors
+
+Errors print as `Error: ...`, followed by `Hint: ...` when Hewitt knows what to do
+next, for example a mistyped command, an unreachable Docker daemon, a session
+name that does not exist, or an agent that exited.
 
 Tracking begins with new launches of this CLI; already-running untracked exec
 processes cannot be discovered and reattached retroactively. Connections disappear

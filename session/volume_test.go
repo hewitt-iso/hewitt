@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -222,7 +224,12 @@ func TestVolumeSettingsChecks(t *testing.T) {
 		{AgentOptions{Agent: "codex", Image: "x", Workspace: "worktree"}, "danger: [host-paths]"},
 		{AgentOptions{Agent: "codex", Image: "x", SSH: true, Isolation: "restricted"}, "ssh needs direct network access"},
 	} {
-		if _, err := mergeSettings(tt.opts); err == nil || !strings.Contains(err.Error(), tt.want) {
+		_, err := mergeSettings(tt.opts)
+		var danger *DangerError
+		if errors.As(err, &danger) {
+			err = fmt.Errorf("%w (%s)", err, danger.Hint())
+		}
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%+v: %v, want %q", tt.opts, err, tt.want)
 		}
 	}

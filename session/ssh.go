@@ -24,14 +24,14 @@ func sshAgentMount() (docker.BindMount, error) {
 	}
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
-		return docker.BindMount{}, fmt.Errorf("ssh: SSH_AUTH_SOCK is not set; start ssh-agent and ssh-add a key")
+		return docker.BindMount{}, &SSHAgentError{Reason: "SSH_AUTH_SOCK is not set"}
 	}
 	info, err := os.Stat(socket)
 	if err != nil {
-		return docker.BindMount{}, fmt.Errorf("ssh: agent socket: %w", err)
+		return docker.BindMount{}, &SSHAgentError{Reason: "agent socket", Err: err}
 	}
 	if info.Mode()&os.ModeSocket == 0 {
-		return docker.BindMount{}, fmt.Errorf("ssh: SSH_AUTH_SOCK %q is not a socket", socket)
+		return docker.BindMount{}, &SSHAgentError{Reason: fmt.Sprintf("SSH_AUTH_SOCK %q is not a socket", socket)}
 	}
 	return docker.BindMount{Source: socket, Target: sshAgentSocket}, nil
 }

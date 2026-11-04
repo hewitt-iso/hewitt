@@ -59,7 +59,7 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 			}
 			type target struct{ ref, label string }
 			var targets []target
-			workspaceID := ""
+			workspaceID, workspaceName := "", ""
 			if len(args) > 0 {
 				var matches []session.AgentRun
 				for _, run := range runs {
@@ -81,6 +81,7 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 					return session.Attach(cmd.Context(), store, m.ID, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 				}
 				workspaceID = m.ID
+				workspaceName = m.Name
 			}
 			for _, run := range runs {
 				if workspaceID != "" && run.WorkspaceID != workspaceID {
@@ -108,7 +109,7 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 				}
 			}
 			if len(targets) == 0 {
-				return fmt.Errorf("no running agents or legacy sessions found")
+				return noAttachTargets(cmd, store, workspaceName)
 			}
 			selected := 0
 			if isInteractive(cmd) {
@@ -121,9 +122,31 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 					return err
 				}
 			} else if len(targets) > 1 {
-				return fmt.Errorf("multiple agents are running; specify an agent run ID")
+				labels := make([]string, len(targets))
+				for i, target := range targets {
+					labels[i] = target.label
+				}
+				return &ambiguousAgentError{Choices: labels}
 			}
 			return session.Attach(cmd.Context(), store, targets[selected].ref, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
+}
+
+// noAttachTargets reports why nothing can be reattached.
+func noAttachTargets(cmd *cobra.Command, store *session.Store, workspace string) error {
+	if workspace != "" {
+		return &noAgentsError{Workspace: workspace}
+	}
+	sessions, err := store.List()
+	if err != nil {
+		return err
+	}
+	var idle []string
+	for _, m := range sessions {
+		if m.Terminal == "host" && session.Status(cmd.Context(), m) == "running" {
+			idle = append(idle, m.Name)
+		}
+	}
+	return &noAgentsError{Idle: idle}
 }

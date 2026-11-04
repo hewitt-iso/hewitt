@@ -10,6 +10,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// unknownCommand explains a mistyped command instead of only rejecting it.
+func unknownCommand(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return &unknownCommandError{Name: args[0], Path: cmd.CommandPath(), Suggestions: cmd.SuggestionsFor(args[0])}
+}
+
 // NewRootCommand returns an independent command tree for one invocation.
 func NewRootCommand(version string) *cobra.Command {
 	var configPath string
@@ -18,7 +26,7 @@ func NewRootCommand(version string) *cobra.Command {
 		Use:           "hewitt",
 		Short:         "Run coding agents in isolated local workspaces",
 		Version:       version,
-		Args:          cobra.NoArgs,
+		Args:          unknownCommand,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

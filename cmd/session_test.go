@@ -88,8 +88,8 @@ func TestSessionCommandInputs(t *testing.T) {
 		want string
 	}{
 		{name: "empty image override", args: []string{"run", "claude", "--image", ""}, want: "image must be nonempty"},
-		{name: "unsupported agent", args: []string{"run", "unknown"}, want: "invalid argument"},
-		{name: "empty agent", args: []string{"run", ""}, want: "invalid argument"},
+		{name: "unsupported agent", args: []string{"run", "unknown"}, want: "unknown agent"},
+		{name: "empty agent", args: []string{"run", ""}, want: "unknown agent"},
 		{name: "unknown flag", args: []string{"logs", "session-id", "--unknown"}, want: "unknown flag"},
 		{name: "config before command", args: []string{"--config", broken, "ps"}, want: "parse config"},
 		{name: "config after command", args: []string{"ps", "--config", broken}, want: "parse config"},

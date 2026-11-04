@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -18,7 +20,8 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 		Long: "List saved sessions from the configured data_dir in session ID order.\n" +
 			"By default, stopped sessions are omitted; use --all (-a) to include them.\n" +
 			"Shows 12-character short IDs (or full IDs with --no-trunc), agents, images,\n" +
-			"names, status, and creation times in UTC.\n" +
+			"names, status, and creation times in UTC. Shared workspaces list their\n" +
+			"connected agents; a running one with none is idle (hewitt run opens one).\n" +
 			"An empty store prints only the table header. No files are created.\n\n" +
 			"Docker is not required; when Docker is unavailable, status is reported as\n" +
 			"unknown and all saved sessions are listed.",
@@ -33,6 +36,15 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Shared workspaces list their connected agents rather than "workspace".
+			runs, err := store.RunningAgents()
+			if err != nil {
+				return err
+			}
+			connected := map[string][]string{}
+			for _, run := range runs {
+				connected[run.WorkspaceID] = append(connected[run.WorkspaceID], run.Agent)
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "ID\tAGENT\tIMAGE\tNAME\tSTATUS\tCREATED"); err != nil {
 				return fmt.Errorf("write session list: %w", err)
@@ -42,6 +54,16 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 				if !all && status == "stopped" {
 					continue
 				}
+				agents := m.Agent
+				if m.Terminal == "host" {
+					agents = "-"
+					if names := connected[m.ID]; len(names) > 0 {
+						slices.Sort(names)
+						agents = strings.Join(names, ",")
+					} else if status == "running" {
+						status = "idle"
+					}
+				}
 				id := shortID(m.ID)
 				if noTrunc {
 					id = m.ID
@@ -50,7 +72,7 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 				if name == "" {
 					name = "-"
 				}
-				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", id, m.Agent, m.Image, name, status, m.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", id, agents, m.Image, name, status, m.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
 					return fmt.Errorf("write session list: %w", err)
 				}
 			}

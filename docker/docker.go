@@ -246,7 +246,7 @@ func (c Client) VolumeExists(ctx context.Context, name string) (bool, error) {
 		return false, err
 	}
 	if _, err := c.execute(ctx, "volume", "inspect", "--", name); err != nil {
-		if notFound(err) {
+		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect volume %q: %w", name, err)
@@ -259,7 +259,7 @@ func (c Client) RemoveVolume(ctx context.Context, name string) error {
 	if err := validateArgument("volume name", name); err != nil {
 		return err
 	}
-	if _, err := c.execute(ctx, "volume", "rm", "--", name); err != nil && !notFound(err) {
+	if _, err := c.execute(ctx, "volume", "rm", "--", name); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("remove volume %q: %w", name, err)
 	}
 	return nil
@@ -337,7 +337,7 @@ func (c Client) Running(ctx context.Context, id string) (bool, error) {
 	}
 	out, err := c.execute(ctx, "container", "inspect", "--format", "{{.State.Running}}", "--", id)
 	if err != nil {
-		if notFound(err) {
+		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect container %q: %w", id, err)
@@ -363,7 +363,7 @@ func (c Client) Remove(ctx context.Context, id string) error {
 	if err := validateArgument("container ID or name", id); err != nil {
 		return err
 	}
-	if _, err := c.execute(ctx, "container", "rm", "--", id); err != nil && !notFound(err) {
+	if _, err := c.execute(ctx, "container", "rm", "--", id); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("remove container %q: %w", id, err)
 	}
 	return nil
@@ -375,20 +375,10 @@ func (c Client) RemoveNetwork(ctx context.Context, name string) error {
 	if err := validateArgument("network name", name); err != nil {
 		return err
 	}
-	if _, err := c.execute(ctx, "network", "rm", "--", name); err != nil && !notFound(err) {
+	if _, err := c.execute(ctx, "network", "rm", "--", name); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("remove network %q: %w", name, err)
 	}
 	return nil
-}
-
-func notFound(err error) bool {
-	if errors.Is(err, exec.ErrNotFound) {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such container") || strings.Contains(message, "no such network") ||
-		strings.Contains(message, "no such volume") ||
-		strings.Contains(message, "not found")
 }
 
 // Start starts a container by ID or name without attaching to it. Success means
@@ -438,7 +428,7 @@ func runTerminal(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		} else if errors.Is(err, exec.ErrNotFound) {
-			err = fmt.Errorf("ensure the Docker CLI is installed: %w", err)
+			err = fmt.Errorf("%w: %w", ErrCLIMissing, err)
 		} else {
 			// Some Docker CLI versions report their detach escape as exit 1.
 			// Match only that diagnostic; other failures must remain errors.
@@ -474,15 +464,53 @@ func (Client) execute(ctx context.Context, args ...string) (string, error) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if detail := strings.TrimSpace(stderr.String()); detail != "" {
-			return "", fmt.Errorf("docker: %w: %s", err, detail)
-		}
 		if errors.Is(err, exec.ErrNotFound) {
-			return "", fmt.Errorf("docker (ensure the Docker CLI is installed): %w", err)
+			return "", fmt.Errorf("%w: %w", ErrCLIMissing, err)
 		}
-		return "", fmt.Errorf("docker: %w", err)
+		return "", newCommandError(args, strings.TrimSpace(stderr.String()), err)
 	}
 	return stdout.String(), nil
+}
+
+// Pull fetches the current version of an image tag. Progress is not shown.
+func (c Client) Pull(ctx context.Context, image string) error {
+	if err := validateArgument("image", image); err != nil {
+		return err
+	}
+	if _, err := c.execute(ctx, "image", "pull", "--quiet", "--", image); err != nil {
+		return fmt.Errorf("pull image %s: %w", image, err)
+	}
+	return nil
+}
+
+// ImageID returns the local image ID for a reference, or "" when the image is
+// not present locally. Pulled reports whether the local copy came from a
+// registry; images built locally have no repository digests.
+func (c Client) ImageID(ctx context.Context, image string) (id string, pulled bool, err error) {
+	if err := validateArgument("image", image); err != nil {
+		return "", false, err
+	}
+	out, err := c.execute(ctx, "image", "inspect", "--format", "{{.Id}} {{len .RepoDigests}}", "--", image)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("inspect image %s: %w", image, err)
+	}
+	id, digests, _ := strings.Cut(strings.TrimSpace(out), " ")
+	return id, digests != "0", nil
+}
+
+// ContainerImage returns the image ID a container was created from.
+func (c Client) ContainerImage(ctx context.Context, id string) (string, error) {
+	if err := validateArgument("container ID or name", id); err != nil {
+		return "", err
+	}
+	out, err := c.execute(ctx, "container", "inspect", "--format", "{{.Image}}", "--", id)
+	if err != nil {
+		return "", fmt.Errorf("inspect container %q: %w", id, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func validateArgument(name, value string) error {

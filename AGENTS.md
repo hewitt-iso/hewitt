@@ -55,6 +55,10 @@ do not make separate API credits a prerequisite.
   globals for mutable command or session state.
 - Return errors with operation context and wrap causes with `%w`. Print errors
   once at the CLI boundary; only `main` decides process exit status.
+- Errors a user can act on are typed (in each package's `errors.go`) and carry the
+  advice in a `Hint() string` method; `cmd.PrintError` prints it after the error.
+  Keep messages factual, put next steps in hints, and match with `errors.Is/As`,
+  not message text.
 - Prefer the standard library. Cobra is the CLI dependency; justify additional
   dependencies with a concrete need. Run `go mod tidy` and commit both module files.
 

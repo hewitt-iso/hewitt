@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/hewitt-iso/hewitt/docker"
@@ -55,7 +56,7 @@ func Remove(ctx context.Context, store *Store, id string, force bool) (string, e
 			return "", err
 		}
 		if running {
-			return "", fmt.Errorf("session %s is running in container %q; stop it first with hewitt stop", m.ID, m.Container)
+			return "", &RunningError{Session: sessionRef(m), Container: m.Container}
 		}
 		if err := store.Delete(m.ID); err != nil {
 			return "", err
@@ -72,7 +73,7 @@ func Remove(ctx context.Context, store *Store, id string, force bool) (string, e
 			return "", err
 		}
 		if running {
-			return "", fmt.Errorf("container %s is running; stop the session first with hewitt stop %s", container, m.ID)
+			return "", &RunningError{Session: sessionRef(m), Container: container[:min(12, len(container))]}
 		}
 	}
 	if m.Volume != nil && !force {
@@ -80,18 +81,8 @@ func Remove(ctx context.Context, store *Store, id string, force bool) (string, e
 			return "", err
 		}
 	}
-	for _, container := range containers {
-		if err := client.Remove(ctx, container); err != nil {
-			return "", err
-		}
-	}
-	if m.Egress != nil {
-		if err := client.RemoveNetwork(ctx, m.Egress.Network); err != nil {
-			return "", err
-		}
-		if err := os.RemoveAll(m.Egress.ConfigDir); err != nil {
-			return "", fmt.Errorf("remove egress configuration: %w", err)
-		}
+	if err := removeContainers(ctx, m); err != nil {
+		return "", err
 	}
 	if m.Workspace != nil {
 		if err := workspace.RemoveAll(ctx, *m.Workspace); err != nil {
@@ -112,6 +103,57 @@ func Remove(ctx context.Context, store *Store, id string, force bool) (string, e
 		return "", err
 	}
 	return m.ID, nil
+}
+
+// sessionRef is the shortest name a user can type to select m again.
+func sessionRef(m Metadata) string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return m.ID[:12]
+}
+
+// removeContainers deletes a session's stopped containers, egress network, and
+// egress configuration. Workspaces, volumes, and metadata are kept.
+func removeContainers(ctx context.Context, m Metadata) error {
+	client := docker.Client{}
+	containers := []string{m.ID}
+	if m.Egress != nil {
+		containers = append(containers, m.Egress.Proxy)
+	}
+	for _, container := range containers {
+		if err := client.Remove(ctx, container); err != nil {
+			return err
+		}
+	}
+	if m.Egress != nil {
+		if err := client.RemoveNetwork(ctx, m.Egress.Network); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(m.Egress.ConfigDir); err != nil {
+			return fmt.Errorf("remove egress configuration: %w", err)
+		}
+	}
+	return nil
+}
+
+// replaceContainers stops and removes an idle workspace's containers so a new
+// container can mount the same volume. The metadata stays until its replacement
+// is saved.
+func replaceContainers(ctx context.Context, m Metadata, stderr io.Writer) error {
+	if err := reportStep(stderr, "Removing the outdated workspace container"); err != nil {
+		return err
+	}
+	client := docker.Client{}
+	if err := client.Stop(ctx, m.ID); err != nil && !docker.IsNotFound(err) {
+		return err
+	}
+	if m.Egress != nil {
+		if err := client.Stop(ctx, m.Egress.Proxy); err != nil && !docker.IsNotFound(err) {
+			return err
+		}
+	}
+	return removeContainers(ctx, m)
 }
 
 // Status reports whether a session is "running", "stopped", or "unknown" when
