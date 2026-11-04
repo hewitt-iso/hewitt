@@ -90,6 +90,9 @@ branch such as `codex-1`, `codex-2`, or `claude-1` for it) or open a shell in th
 Tmux window titles show the agent and project name without worktree directory
 suffixes. Default volume sessions keep these worktrees off the host; existing
 legacy host worktrees are preserved.
+In a shell, type `detach` (or press `Ctrl-B, D`) to return to the host while
+keeping the session running; reconnect with `hewitt attach`. Use `exit` or
+`Ctrl-D` to close the shell. `Ctrl-C` cancels the current command.
 
 When host config sync is enabled, OpenCode imports include `tui.json`,
 `tui.jsonc`, and custom `themes/`, preserving theme and keybinding preferences.
