@@ -12,11 +12,14 @@ do not make separate API credits a prerequisite.
 - `cmd`: Cobra commands, argument validation, user-facing output.
 - `config`: configuration defaults, file loading, and validation.
 - `docker`: container creation, startup, and terminal attachment through the
-  Docker CLI, persistent tmux server/client operations, subprocess errors, and cancellation. Callers own created containers; failed starts preserve them
+  Docker CLI, foreground exec connections, legacy tmux server/client operations, subprocess errors, and cancellation. Callers own created containers; failed starts preserve them
   and report their IDs. Do not silently remove containers after a failed start.
 - `session`: versioned local JSON metadata, create/save/start coordination, and saved
-  session lookup for attachment. Native run sessions use a foreground tmux server;
-  reconnecting must not launch another agent. Preserve legacy Docker attachment
+  session lookup for attachment. Default volume runs reuse workspace containers
+  with matching settings and open fresh foreground agent processes through exec;
+  host terminals own connection persistence. Workspace metadata owns the container
+  and volume, not individual processes. Legacy tmux sessions remain attachable;
+  reconnecting to them must not launch another agent. Preserve legacy Docker attachment
   for records without a terminal marker.
   Save metadata before startup; preserve and identify containers if saving fails.
   Metadata deletion never removes containers or worktrees. Run sessions create

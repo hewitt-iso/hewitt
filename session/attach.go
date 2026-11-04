@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/hewitt-iso/hewitt/docker"
@@ -13,6 +14,9 @@ func Attach(ctx context.Context, store *Store, id string, stdin io.Reader, stdou
 	m, err := store.Resolve(id)
 	if err != nil {
 		return err
+	}
+	if m.Terminal == "host" {
+		return fmt.Errorf("workspace %s uses host terminals; use hewitt run to open a new agent (reattach through your host tmux)", m.Name)
 	}
 	if m.Mode == "exec" {
 		return (docker.Client{}).AttachTerminalSocket(ctx, m.Container, m.Socket, stdin, stdout, stderr)

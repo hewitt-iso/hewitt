@@ -159,15 +159,15 @@ esac
 		t.Fatal(err)
 	}
 	m, err := store.Get(id)
-	if err != nil || m.Name != "codex-1" || m.Volume == nil || m.Workspace != nil {
+	if err != nil || m.Name != "workspace-1" || m.Volume == nil || m.Workspace != nil || m.Terminal != "host" || m.Agent != "workspace" {
 		t.Fatalf("metadata = %+v, %v", m, err)
 	}
 	v := *m.Volume
-	if v.Volume != "hewitt-codex-1" || v.Branch == "" || !strings.HasPrefix(v.Path, volumeRoot+"/") {
+	if v.Volume != "hewitt-workspace-1" || v.Branch == "" || !strings.HasPrefix(v.Path, volumeRoot+"/") {
 		t.Fatalf("volume = %+v", v)
 	}
 	repo, _ := os.Getwd()
-	if anchored := gitIn(t, repo, "rev-parse", "refs/hewitt/codex-1/base"); anchored != v.Base {
+	if anchored := gitIn(t, repo, "rev-parse", "refs/hewitt/workspace-1/base"); anchored != v.Base {
 		t.Fatalf("anchor = %q, base %q", anchored, v.Base)
 	}
 	raw, err := os.ReadFile(log)
@@ -185,14 +185,14 @@ esac
 			helpers = append(helpers, call)
 		}
 	}
-	if !slices.Contains(calls, "volume create --label io.hewitt.managed=true -- hewitt-codex-1") || len(helpers) != 2 {
+	if !slices.Contains(calls, "volume create --label io.hewitt.managed=true -- hewitt-workspace-1") || len(helpers) != 2 {
 		t.Fatalf("calls = %q", calls)
 	}
 	if !strings.Contains(helpers[0], "--cap-drop ALL") || !strings.Contains(helpers[0], "--cap-add CHOWN") || !strings.Contains(helpers[0], "--user 0:0") {
 		t.Fatalf("ownership helper = %q", helpers[0])
 	}
 	for _, helper := range helpers {
-		for _, want := range []string{"--rm", "--network none", "--read-only", "type=volume,src=hewitt-codex-1,dst=/hewitt/work"} {
+		for _, want := range []string{"--rm", "--network none", "--read-only", "type=volume,src=hewitt-workspace-1,dst=/hewitt/work"} {
 			if !strings.Contains(helper, want) {
 				t.Fatalf("helper %q lacks %q", helper, want)
 			}
@@ -202,7 +202,7 @@ esac
 		t.Fatalf("init helper is privileged: %q", helpers[1])
 	}
 	objects := "type=bind,src=" + v.Objects + ",dst=" + sourceObjects + ",readonly"
-	for _, want := range []string{"type=volume,src=hewitt-codex-1,dst=/hewitt/work", objects, "HEWITT_REPO=" + v.Path, "HEWITT_BRANCH=" + v.Branch, "--workdir " + v.Path} {
+	for _, want := range []string{"type=volume,src=hewitt-workspace-1,dst=/hewitt/work", objects, "HEWITT_REPO=" + v.Path, "HEWITT_BRANCH=" + v.Branch, "--workdir " + v.Path} {
 		if !strings.Contains(create, want) {
 			t.Fatalf("create %q lacks %q", create, want)
 		}

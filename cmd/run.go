@@ -17,7 +17,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	var file, mode, target, workspace, isolation string
 	var danger []string
 	var ssh bool
-	var detach bool
+	var detach, separate bool
 	short := "Start an agent container with a persistent native profile"
 	exampleAction := action
 	switch action {
@@ -54,6 +54,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			if cmd.Flags().Changed("base") {
 				opts.Base = base
 			}
+			opts.Separate, opts.Shell = separate, cmd.Name() == "shell"
 			opts.File, opts.Mode, opts.Target, opts.Workspace, opts.Isolation, opts.Danger, opts.SSH = file, mode, target, workspace, isolation, danger, ssh
 			if isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
 				start, err := runOnboarding(cmd, cfg, &opts)
@@ -69,7 +70,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			return executeRun(cmd, cfg, opts, detach)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "optional Docker container name")
+	cmd.Flags().StringVar(&name, "name", "", "workspace name (different names select separate containers)")
 	cmd.Flags().StringVar(&profileID, "profile", "default", "persistent profile ID, scoped to the agent")
 	if action != "run" {
 		cmd.Flags().StringVar(&image, "image", "", "override the default Claude/Codex image (required for OpenCode)")
@@ -81,11 +82,12 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 		"  hewitt run codex --profile personal\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
-	cmd.Long = short + ".\n\nFlags override hewitt.yml (hewitt.yml in --repo, or --file); see README for its keys.\nSelects ghcr.io/hewitt-iso/hewitt:latest automatically (hewitt.yml image applies to run only) and installs agents on demand into <data_dir>/tools.\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported."
+	cmd.Long = short + ".\n\nFlags override hewitt.yml (hewitt.yml in --repo, or --file); see README for its keys.\nSelects ghcr.io/hewitt-iso/hewitt:latest automatically (hewitt.yml image applies to run only) and installs agents on demand into <data_dir>/tools.\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nA dedicated profile is mounted; no host credentials are imported.\nDefault volume runs reuse a workspace container across agents with matching settings. Each run opens a fresh foreground process; use host tmux to keep it connected. --separate creates another container. hewitt shell opens a shell. Legacy worktree/copy/direct and exec/sidecar modes retain container tmux."
 	cmd.Flags().StringVar(&image, "image", "", "override the default image or hewitt.yml image")
 	cmd.Flags().StringVar(&repository, "repo", ".", "source directory or Git repository (default: current directory)")
 	cmd.Flags().StringVar(&base, "base", "HEAD", "commit or ref to start the session branch from")
-	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "start without attaching; print the session ID")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "prepare a workspace without opening an agent; print its ID (legacy modes start detached)")
+	cmd.Flags().BoolVar(&separate, "separate", false, "create a separate workspace container instead of reusing one")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "hewitt.yml path (default: hewitt.yml in --repo)")
 	cmd.Flags().StringVar(&mode, "mode", "", "launch mode: new, exec, or sidecar (default new)")
 	cmd.Flags().StringVar(&target, "target", "", "existing container for exec and sidecar modes")
@@ -114,6 +116,20 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), id)
 		return err
 	}
+	store, err := session.NewStore(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	m, err := store.Get(id)
+	if err != nil {
+		return err
+	}
+	if m.Terminal == "host" {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Workspace: %s (%s)\nUse your host terminal or tmux for navigation. Exit closes this process; the workspace stays running.\n", m.Name, id); err != nil {
+			return err
+		}
+		return session.OpenWorkspace(cmd.Context(), store, id, opts, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	}
 	reconnect := shortID(id)
 	if opts.Name != "" {
 		reconnect = opts.Name
@@ -121,9 +137,16 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\nDetach with Ctrl-B, D; reconnect with hewitt attach %s\n", id, reconnect); err != nil {
 		return fmt.Errorf("report session %q (container preserved): %w", id, err)
 	}
-	store, err := session.NewStore(cfg.DataDir)
-	if err != nil {
-		return err
-	}
 	return session.Attach(cmd.Context(), store, id, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+}
+
+func newShellCommand(cfg *config.Config) *cobra.Command {
+	cmd := newAgentCommand("run", cfg)
+	cmd.Use = "shell"
+	cmd.Short = "Open a shell in the shared workspace container"
+	cmd.Long = "Open a fresh shell in the workspace container. The container is reused across agent runs. Use exit or Ctrl-D to close the shell; use host tmux to detach."
+	cmd.Example = "  hewitt shell\n  hewitt shell --repo /path/to/project"
+	cmd.Args = cobra.NoArgs
+	cmd.ValidArgs = nil
+	return cmd
 }
