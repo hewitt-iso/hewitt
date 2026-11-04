@@ -49,7 +49,7 @@ func optionalSessionArg(cmd *cobra.Command, args []string) error {
 		if isInteractive(cmd) {
 			return nil
 		}
-		return fmt.Errorf("accepts 1 arg(s), received 0")
+		return &missingSessionError{}
 	}
 	if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 		return err

@@ -161,7 +161,7 @@ func TestDockerErrors(t *testing.T) {
 func TestMissingDocker(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := (Client{}).Create(context.Background(), CreateOptions{Image: "example/agent:test"})
-	if !errors.Is(err, exec.ErrNotFound) || !strings.Contains(err.Error(), "Docker CLI is installed") {
+	if !errors.Is(err, exec.ErrNotFound) || !strings.Contains(err.Error(), "Docker CLI not found") {
 		t.Fatalf("expected missing executable error, got %v", err)
 	}
 }

@@ -69,14 +69,14 @@ func Focus(ctx context.Context, l Location, in io.Reader, out, stderr io.Writer)
 		return err
 	}
 	if l.Socket == "" {
-		return fmt.Errorf("this agent was launched outside host tmux; its Docker exec terminal cannot be reattached; launch future agents from host tmux")
+		return &NotReattachableError{}
 	}
 	current, err := Current()
 	if err != nil {
 		return err
 	}
 	if current.Socket != "" && current.Socket != l.Socket {
-		return fmt.Errorf("agent belongs to another host tmux server; run attach outside tmux or from that server")
+		return &OtherServerError{Socket: l.Socket}
 	}
 	target, err := query(ctx, l, "display-message", "-p", "-t", l.Pane, "#{session_id}\t#{window_id}")
 	if err != nil {

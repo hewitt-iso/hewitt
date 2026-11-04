@@ -180,7 +180,7 @@ func (s settings) check() error {
 		if s.danger[item] {
 			return nil
 		}
-		return fmt.Errorf("%s isolation forbids %s; add danger: [%s] (or --danger %s) to allow it explicitly", s.Isolation, what, item, item)
+		return &DangerError{Isolation: s.Isolation, What: what, Item: item}
 	}
 	var checks []error
 	if s.Network == "host" {

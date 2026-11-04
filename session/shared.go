@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -64,46 +66,94 @@ func lockWorkspace(ctx context.Context, dataDir string, s settings) (string, fun
 	}
 }
 
-func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) (string, error) {
+// reuseWorkspace returns a saved workspace container for key. A container built
+// from an older image, or one Docker no longer has, is returned as stale when
+// no agent is connected to it, so the caller can replace the container and keep
+// its volume.
+func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) (string, *Metadata, error) {
 	store, err := NewStore(dataDir)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	records, err := store.List()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	for _, m := range records {
 		if m.Terminal != "host" || m.WorkspaceKey != key {
 			continue
 		}
 		client := docker.Client{}
-		if err := reportStep(stderr, "Checking saved workspace"); err != nil {
-			return "", err
+		if err := reportStep(stderr, "Checking saved workspace "+m.Name); err != nil {
+			return "", nil, err
+		}
+		have, err := client.ContainerImage(ctx, m.ID)
+		if err != nil && !docker.IsNotFound(err) {
+			return "", nil, err
+		}
+		if err != nil {
+			if err := warn(stderr, "container %s of workspace %s no longer exists; creating a new one with the same volume", m.ID[:12], m.Name); err != nil {
+				return "", nil, err
+			}
+			return "", &m, nil
+		}
+		current, _, err := client.ImageID(ctx, m.Image)
+		if err != nil {
+			return "", nil, err
+		}
+		if current != "" && have != "" && current != have {
+			live, err := workspaceRuns(store, m.ID)
+			if err != nil {
+				return "", nil, err
+			}
+			if len(live) == 0 {
+				if _, err := fmt.Fprintf(stderr, "[hewitt] Workspace %s uses an older %s; replacing its container (the volume and its commits are kept)\n", m.Name, m.Image); err != nil {
+					return "", nil, err
+				}
+				return "", &m, nil
+			}
+			if err := warn(stderr, "workspace %s uses an older %s; it is updated once its %d connected agent(s) exit", m.Name, m.Image, len(live)); err != nil {
+				return "", nil, err
+			}
 		}
 		running, err := client.Running(ctx, m.ID)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if !running {
 			if err := reportStep(stderr, "Restarting saved workspace"); err != nil {
-				return "", err
+				return "", nil, err
 			}
 			if m.Egress != nil {
 				if err := client.Start(ctx, m.Egress.Proxy); err != nil {
-					return "", err
+					return "", nil, err
 				}
 			}
 			if err := client.Start(ctx, m.ID); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
-		if _, err := fmt.Fprintf(stderr, "Reusing workspace %s (%s)\n", m.Name, m.ID); err != nil {
-			return "", err
+		if _, err := fmt.Fprintf(stderr, "Reusing workspace %s (%s)\n", m.Name, m.ID[:12]); err != nil {
+			return "", nil, err
 		}
-		return m.ID, nil
+		return m.ID, nil, nil
 	}
-	return "", nil
+	return "", nil, nil
+}
+
+// workspaceRuns lists the live agent connections of one workspace.
+func workspaceRuns(store *Store, id string) ([]AgentRun, error) {
+	runs, err := store.RunningAgents()
+	if err != nil {
+		return nil, err
+	}
+	var live []AgentRun
+	for _, run := range runs {
+		if run.WorkspaceID == id {
+			live = append(live, run)
+		}
+	}
+	return live, nil
 }
 
 // OpenWorkspace starts a new foreground process, never a reconnect to an old
@@ -136,8 +186,22 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if _, err := fmt.Fprintf(stderr, "Agent run: %s (%s in %s)\n", run.ID[:12], choice, m.Name); err != nil {
 		return fmt.Errorf("report agent run: %w", err)
 	}
+	if run.Terminal.Socket == "" {
+		if err := warn(stderr, "not inside tmux: %s ends when this terminal closes and cannot be reattached (start tmux first to keep agents reattachable)", choice); err != nil {
+			return err
+		}
+	}
 	if err := reportStep(stderr, "Opening "+choice+" in workspace"); err != nil {
 		return err
 	}
-	return (docker.Client{}).ExecInteractive(ctx, m.ID, command, in, out, stderr)
+	err = (docker.Client{}).ExecInteractive(ctx, m.ID, command, in, out, stderr)
+	var exit *exec.ExitError
+	if ctx.Err() == nil && errors.As(err, &exit) {
+		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}
+	}
+	if err == nil || errors.Is(err, errInterrupted) {
+		_, werr := fmt.Fprintf(stderr, "[hewitt] %s exited; workspace %s keeps running (hewitt run opens another agent, hewitt stop %s stops it)\n", choice, m.Name, m.Name)
+		return werr
+	}
+	return err
 }

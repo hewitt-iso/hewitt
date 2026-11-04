@@ -127,7 +127,11 @@ func (s *Store) Resolve(ref string) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("session must not be empty")
 	}
 	if validateID(ref) == nil {
-		return s.Get(ref)
+		m, err := s.Get(ref)
+		if errors.Is(err, os.ErrNotExist) {
+			return Metadata{}, &NotFoundError{Ref: ref}
+		}
+		return m, err
 	}
 	sessions, err := s.List()
 	if err != nil {
@@ -146,7 +150,7 @@ func (s *Store) Resolve(ref string) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("session name %q is ambiguous (%s, %s); specify a longer ID prefix", ref, nameMatches[0].ID[:12], nameMatches[1].ID[:12])
 	}
 	if strings.Trim(ref, "0123456789abcdef") != "" || len(ref) > 64 {
-		return Metadata{}, fmt.Errorf("session %q: %w", ref, os.ErrNotExist)
+		return Metadata{}, &NotFoundError{Ref: ref}
 	}
 	var prefixMatches []Metadata
 	for _, m := range sessions {
@@ -160,7 +164,7 @@ func (s *Store) Resolve(ref string) (Metadata, error) {
 	if len(prefixMatches) > 1 {
 		return Metadata{}, fmt.Errorf("session ID prefix %q is ambiguous (%s, %s); specify more characters", ref, prefixMatches[0].ID[:12], prefixMatches[1].ID[:12])
 	}
-	return Metadata{}, fmt.Errorf("session %q: %w", ref, os.ErrNotExist)
+	return Metadata{}, &NotFoundError{Ref: ref}
 }
 
 // List returns records in ID order. A missing store is empty. Invalid records

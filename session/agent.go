@@ -65,6 +65,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if err := profile.ValidateID(s.Profile); err != nil {
 			return "", err
 		}
+		if err := refreshImage(ctx, s.Image, stderr); err != nil {
+			return "", err
+		}
 	}
 	if (opts.Shell || opts.Separate) && (s.Mode != "new" || s.Workspace != "volume") {
 		return "", fmt.Errorf("shell and --separate require the managed volume workspace in new mode")
@@ -115,15 +118,19 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 	}
 	envFile, envKeys, err := s.envFile()
+	// stale is a saved workspace whose container is replaced; its volume is kept.
+	var stale *Metadata
 	if err != nil {
 		return "", err
 	}
 	if key != "" {
 		// Reuse only after validating host mounts and the credential env file.
 		if !opts.Separate {
-			if id, err := reuseWorkspace(ctx, opts.DataDir, key, stderr); id != "" || err != nil {
+			id, old, err := reuseWorkspace(ctx, opts.DataDir, key, stderr)
+			if id != "" || err != nil {
 				return id, err
 			}
+			stale = old
 		} else {
 			key = fmt.Sprintf("%x", sha256.Sum256([]byte(key+rand.Text())))
 		}
@@ -167,32 +174,41 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if err != nil {
 			return "", err
 		}
-		name := s.Name
-		if name == "" {
-			if name, err = nextName(ctx, store, top, s.Agent); err != nil {
+		var v workspace.Volume
+		if stale != nil {
+			v, m.Name = *stale.Volume, stale.Name
+			preserved = volumePreserved(v)
+			if err := replaceContainers(ctx, *stale, stderr); err != nil {
+				return "", fmt.Errorf("%s; old workspace record kept: %w", preserved, err)
+			}
+		} else {
+			name := s.Name
+			if name == "" {
+				if name, err = nextName(ctx, store, top, s.Agent); err != nil {
+					return "", err
+				}
+				// A generated name labels the session, not the container.
+				m.Name = name
+			}
+			base := ""
+			if len(s.WorkspaceArgs) > 0 {
+				base = s.WorkspaceArgs[0]
+			}
+			if err := reportStep(stderr, "Preparing repository snapshot"); err != nil {
 				return "", err
 			}
-			// A generated name labels the session, not the container.
-			m.Name = name
-		}
-		base := ""
-		if len(s.WorkspaceArgs) > 0 {
-			base = s.WorkspaceArgs[0]
-		}
-		if err := reportStep(stderr, "Preparing repository snapshot"); err != nil {
-			return "", err
-		}
-		v, err := workspace.PrepareVolume(ctx, top, base, name)
-		if err != nil {
-			return "", err
+			v, err = workspace.PrepareVolume(ctx, top, base, name)
+			if err != nil {
+				return "", err
+			}
+			v.Path = volumeRepo(filepath.Base(v.Repository))
+			preserved = volumePreserved(v)
+			if err := createVolume(ctx, s.Image, v, stderr); err != nil {
+				return "", fmt.Errorf("%s: %w", preserved, err)
+			}
 		}
 		projectName = filepath.Base(v.Repository)
-		v.Path = volumeRepo(projectName)
 		m.Volume = &v
-		preserved = volumePreserved(v)
-		if err := createVolume(ctx, s.Image, v, stderr); err != nil {
-			return "", fmt.Errorf("%s: %w", preserved, err)
-		}
 		root = v.Path
 		volumes, binds := volumeMounts(v)
 		create.Volumes = append(create.Volumes, volumes...)
@@ -319,6 +335,12 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", preserved, err)
 	}
+	if stale != nil && stale.ID != metadata.ID {
+		// The new record owns the volume now; the old one names removed containers.
+		if err := store.Delete(stale.ID); err != nil {
+			return "", fmt.Errorf("container %s preserved: %w", metadata.ID[:12], err)
+		}
+	}
 	if m.Egress != nil {
 		if err := (docker.Client{}).Start(ctx, m.Egress.Proxy); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
@@ -393,6 +415,9 @@ func Authenticate(ctx context.Context, opts AgentOptions, operation string, in i
 	}
 	create, dir, err := prepare(ctx, opts, operation)
 	if err != nil {
+		return err
+	}
+	if err := refreshImage(ctx, create.Image, stderr); err != nil {
 		return err
 	}
 	store, err := NewStore(opts.DataDir)

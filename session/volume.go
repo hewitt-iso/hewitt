@@ -184,7 +184,7 @@ func checkVolume(ctx context.Context, m Metadata) error {
 		return fmt.Errorf("%w; volume %q kept (hewitt rm --force discards it)", err, v.Volume)
 	}
 	if len(dirty) > 0 {
-		return fmt.Errorf("volume %q has uncommitted or untracked files in %s; commit them and rerun, or hewitt rm --force to discard them", v.Volume, strings.Join(dirty, ", "))
+		return &DirtyVolumeError{Session: m.Name, Volume: v.Volume, Paths: dirty}
 	}
 	return nil
 }
