@@ -78,11 +78,17 @@ func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) 
 			continue
 		}
 		client := docker.Client{}
+		if err := reportStep(stderr, "Checking saved workspace"); err != nil {
+			return "", err
+		}
 		running, err := client.Running(ctx, m.ID)
 		if err != nil {
 			return "", err
 		}
 		if !running {
+			if err := reportStep(stderr, "Restarting saved workspace"); err != nil {
+				return "", err
+			}
 			if m.Egress != nil {
 				if err := client.Start(ctx, m.Egress.Proxy); err != nil {
 					return "", err
@@ -121,6 +127,17 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	command := []string{"hewitt-agent", "run"}
 	if choice != "workspace" {
 		command = append(command, choice)
+	}
+	run, release, err := store.RecordRun(m, choice)
+	if err != nil {
+		return fmt.Errorf("track agent connection: %w", err)
+	}
+	defer release()
+	if _, err := fmt.Fprintf(stderr, "Agent run: %s (%s in %s)\n", run.ID[:12], choice, m.Name); err != nil {
+		return fmt.Errorf("report agent run: %w", err)
+	}
+	if err := reportStep(stderr, "Opening "+choice+" in workspace"); err != nil {
+		return err
 	}
 	return (docker.Client{}).ExecInteractive(ctx, m.ID, command, in, out, stderr)
 }

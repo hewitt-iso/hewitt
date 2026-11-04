@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/hewitt-iso/hewitt/docker"
 )
@@ -11,6 +13,13 @@ import (
 // Attach resolves saved metadata before connecting to its existing terminal. It does not
 // change metadata or start, stop, or remove the container.
 func Attach(ctx context.Context, store *Store, id string, stdin io.Reader, stdout, stderr io.Writer) error {
+	run, err := store.resolveRun(id)
+	if err == nil {
+		return attachRun(ctx, run, stdin, stdout, stderr)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	m, err := store.Resolve(id)
 	if err != nil {
 		return err

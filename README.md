@@ -10,7 +10,8 @@ containers. `run` opens a new foreground agent (or an interactive agent picker),
 `shell` opens a project shell, and matching runs reuse the workspace container.
 `ps` lists saved workspace containers and legacy sessions. `stop`, `sync`, and
 `rm` operate on the entire workspace, including all its agents and branches.
-`logs` is not implemented yet. Legacy tmux sessions remain attachable.
+`attach` selects individual running agent connections in host tmux. `logs` is
+not implemented yet. Legacy container terminals remain attachable.
 
 ## Requirements
 
@@ -39,12 +40,25 @@ make build
 ./bin/hewitt --version
 ```
 
-With no arguments, Hewitt validates configuration and prints help (or runs a
-3-step interactive onboarding prompt on the first terminal run to optionally
-import host skills/MCP/tmux configs, choose whether to start a workspace, and
-share or log in to agent credentials). Unknown
-commands and flags fail with a nonzero exit status. Help and version do not load
-configuration or require any external services.
+In a terminal, `hewitt` opens a selector for Claude, Codex, OpenCode, Pi,
+Antigravity, or a project shell. Select with arrow keys or a number, then Enter;
+press Q or Ctrl-C to cancel before workspace setup starts. Open `hewitt` in
+another host tmux window to choose another agent in the same workspace container.
+First-time users complete the optional 3-step onboarding flow first.
+
+After selection, progress messages show configuration sync, workspace lookup or
+creation, profile and tool cache preparation, repository initialization, and
+container startup. Existing workspaces report reuse or restart. The container
+then reports agent installation checks, profile setup, and launch. First-time
+image pulls and agent installation can take longer; the current step stays visible.
+Progress goes to stderr; stdout belongs to the selected agent (or the workspace
+ID with `--detach`). New container progress messages require a rebuilt image.
+
+`hewitt run` without an agent also opens the selector in a terminal, even when
+`agent` is configured in `hewitt.yml`; `hewitt run codex` launches directly.
+`--detach` skips the selector. Without an interactive terminal, bare `hewitt`
+prints help. Unknown commands and flags fail with a nonzero exit status.
+Help and version do not load configuration or require external services.
 
 Explore command help with `hewitt run --help` or `hewitt help attach`.
 
@@ -80,8 +94,8 @@ into `<data_dir>/tools` (mounted at `/hewitt/tools`). Start each agent in its ow
 host terminal tab or tmux window:
 
 ```sh
-hewitt run codex          # host window 1: branch codex-1
-hewitt run claude         # host window 2: same container, branch claude-1
+hewitt                    # select Codex in host window 1
+hewitt                    # select Claude in host window 2; same container
 hewitt run codex          # host window 3: same container, branch codex-2
 hewitt shell              # another connection: shell in the base checkout
 ```
@@ -90,7 +104,8 @@ Use your host tmux's prefix and detach keys as usual. `exit` or Ctrl-D closes
 a shell; Ctrl-C cancels its current command. Exiting one process leaves the
 workspace container and other agents running. Without host tmux, a lost terminal
 connection cannot be reattached by Hewitt; use native agent conversation resume
-where supported. Old host worktrees are preserved.
+where supported. `hewitt attach` can return to individual agent panes when their
+launching host tmux connection still exists. Old host worktrees are preserved.
 
 The image retains tmux for legacy sessions and explicit exec/sidecar and
 worktree/direct/copy modes. Its palette forwarding tests still cover those modes.
@@ -229,10 +244,12 @@ Use `--separate` or distinct names for separate container isolation.
 
 `run --detach` prepares the workspace and prints its ID without launching an
 agent. Foreground runs are kept connected by your host terminal or host tmux.
-Hewitt does not track individual process IDs or persist their terminal screens.
-A later `run` opens a fresh agent on a new branch, not a reconnection. Native
-conversation resume is agent-specific. `shell` opens a fresh shell; `attach`
-refuses these workspaces with guidance to use host tmux or a new run.
+Hewitt records each foreground connection with a short run ID, agent name,
+workspace identity, and host tmux pane when available. `attach` lists live
+connections and returns to the selected pane. It neither starts another agent
+nor takes over an arbitrary process's terminal. A later `run` opens a fresh agent
+on a new branch; native conversation resume is agent-specific. `shell` opens a
+fresh shell and is tracked in the same way.
 
 Explicit worktree/direct/copy and exec/sidecar modes retain their previous
 container tmux behavior: `--detach` starts the agent and `attach` reconnects to
@@ -395,8 +412,30 @@ saved do not appear.
 ./bin/hewitt attach              # interactive session picker on a terminal
 ```
 
-Default host-terminal workspaces use host tmux for reconnection. The following
-`attach` behavior applies to legacy and explicit tmux-backed modes only.
+For new launches, `hewitt attach` lists individual live agent runs across shared
+workspace containers, including the agent name, workspace, and run ID.
+
+```sh
+hewitt attach                    # choose a running agent or shell
+hewitt attach <agent-run-id>     # full ID or unambiguous prefix
+hewitt attach workspace-1        # choose a run within this workspace
+```
+
+Inside the same host tmux server, selection switches to the existing agent pane.
+Outside tmux, it attaches to that pane's existing host session. Another tmux
+server is refused to avoid changing an unrelated client's terminal. No pane,
+agent, or container is created by attachment. Runs opened in plain terminals
+are shown with a limitation label; selecting one explains that raw Docker exec
+terminals cannot be reattached. Use host tmux for reconnectable launches.
+
+Tracking begins with new launches of this CLI; already-running untracked exec
+processes cannot be discovered and reattached retroactively. Connections disappear
+from the picker when their launching CLI exits. A crashed CLI's unlocked record
+is ignored. The workspace and its data are unaffected. `ps` still lists workspace
+containers and legacy sessions rather than individual connections.
+
+The following attachment behavior applies to legacy and explicit container
+tmux modes only; their terminals also appear in the picker.
 
 `attach` resolves the session from the configured `data_dir` by full ID,
 unambiguous hex ID prefix, or session name (or opens an interactive selector
@@ -450,7 +489,12 @@ creates no files or directories. Do not put credentials in this file.
 ID is also the workspace/session ID; `run --detach` prints that ID. Foreground
 run output belongs to the agent. Shared volume records use `agent: "workspace"`,
 `terminal: "host"`, `workspace_key`, and `volume`. Individual foreground processes
-do not create additional metadata records. The following is a legacy worktree record:
+do not create additional workspace records. Live connections are recorded privately
+in `<data_dir>/runs/<run-id>.json` with a version, agent, workspace ID, and optional
+host tmux socket and pane. The launching CLI holds a kernel lock for the run's
+lifetime; unlocked leftovers are ignored after crashes and reboots. These run
+records contain no credentials or agent input and own no container resources.
+The following is a legacy worktree record:
 
 ```json
 {
@@ -589,7 +633,7 @@ packages, daemon, server, database, or cloud service are part of this foundation
 
 All commands are registered with help, examples, and argument validation. `run`
 implements container creation/startup, `ps` lists saved sessions and their
-status, `attach` reconnects to legacy container terminals, `stop` stops all
+status, `attach` selects live host agent connections or legacy terminals, `stop` stops all
 processes in a workspace, and `rm` removes a stopped session and all its resources.
 `logs` returns a "not implemented yet" error and exits with status 1.
 

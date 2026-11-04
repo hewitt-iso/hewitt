@@ -46,6 +46,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if err := reportStep(stderr, "Reading project settings"); err != nil {
+		return "", err
+	}
 	s, err := mergeSettings(opts)
 	if err != nil {
 		return "", err
@@ -68,6 +71,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	}
 	key := ""
 	if s.Mode == "new" && s.Workspace == "volume" {
+		if err := reportStep(stderr, "Resolving repository and checking workspace availability"); err != nil {
+			return "", err
+		}
 		var unlock func()
 		key, unlock, err = lockWorkspace(ctx, opts.DataDir, s)
 		if err != nil {
@@ -88,6 +94,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 	}
 	// Resolve every host path before creating a workspace or container.
+	if err := reportStep(stderr, "Checking mounts and credential configuration"); err != nil {
+		return "", err
+	}
 	extra, err := s.hostMounts(adapter)
 	if err != nil {
 		return "", err
@@ -127,6 +136,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 	}
 	opts.Agent, opts.Image, opts.Name, opts.Profile = s.Agent, s.Image, s.Name, s.Profile
+	if err := reportStep(stderr, "Preparing agent profiles and tool cache"); err != nil {
+		return "", err
+	}
 	create, _, err := prepare(ctx, opts, "run")
 	if err != nil {
 		return "", err
@@ -167,6 +179,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if len(s.WorkspaceArgs) > 0 {
 			base = s.WorkspaceArgs[0]
 		}
+		if err := reportStep(stderr, "Preparing repository snapshot"); err != nil {
+			return "", err
+		}
 		v, err := workspace.PrepareVolume(ctx, top, base, name)
 		if err != nil {
 			return "", err
@@ -175,7 +190,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		v.Path = volumeRepo(projectName)
 		m.Volume = &v
 		preserved = volumePreserved(v)
-		if err := createVolume(ctx, s.Image, v); err != nil {
+		if err := createVolume(ctx, s.Image, v, stderr); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
 		root = v.Path
@@ -262,6 +277,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 				}
 			}
 		}
+		if err := reportStep(stderr, "Preparing network and egress proxy"); err != nil {
+			return "", fmt.Errorf("%s: %w", preserved, err)
+		}
 		e, err := createEgress(ctx, opts.DataDir, image, append(hosts, s.Allow...))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
@@ -294,6 +312,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if _, err := io.WriteString(stderr, s.describe(create)); err != nil {
 		return "", fmt.Errorf("report settings (%s): %w", preserved, err)
 	}
+	if err := reportStep(stderr, "Creating workspace container (pulling the image if needed)"); err != nil {
+		return "", fmt.Errorf("%s: %w", preserved, err)
+	}
 	metadata, err := createAgentContainer(ctx, store, create, m)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", preserved, err)
@@ -303,10 +324,16 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
 	}
+	if err := reportStep(stderr, "Starting workspace container"); err != nil {
+		return "", fmt.Errorf("container %s preserved: %w", metadata.ID, err)
+	}
 	if err := (docker.Client{}).Start(ctx, metadata.ID); err != nil {
 		return "", fmt.Errorf("%s: %w", preserved, err)
 	}
 	if key == "" {
+		if err := reportStep(stderr, "Starting agent terminal"); err != nil {
+			return "", fmt.Errorf("container %s preserved: %w", metadata.ID, err)
+		}
 		if err := (docker.Client{}).StartTerminal(ctx, metadata.ID, command); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
@@ -342,6 +369,9 @@ func runExternal(ctx context.Context, dataDir string, s settings, stderr io.Writ
 	// Profile environment is omitted: the external container has no profile mount.
 	inv := adapter.Run()
 	command := append([]string{inv.Entrypoint}, inv.Args...)
+	if err := reportStep(stderr, "Starting agent in target container"); err != nil {
+		return "", err
+	}
 	if err := (docker.Client{}).StartExternalTerminal(ctx, s.Target, m.Socket, s.Workdir, command); err != nil {
 		return "", fmt.Errorf("session %s recorded: %w", id, err)
 	}

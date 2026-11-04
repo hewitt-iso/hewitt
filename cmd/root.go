@@ -32,20 +32,21 @@ func NewRootCommand(version string) *cobra.Command {
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
-				opts := session.AgentOptions{DataDir: cfg.DataDir, Repository: "."}
+			if !isInteractive(cmd) {
+				return cmd.Help()
+			}
+			opts := session.AgentOptions{DataDir: cfg.DataDir, Repository: "."}
+			if !profile.IsOnboarded(cfg.DataDir) {
 				start, err := runOnboarding(cmd, &cfg, &opts)
 				if err != nil {
 					return err
 				}
 				if !start {
-					_, err := fmt.Fprintf(cmd.ErrOrStderr(), "Onboarding complete. Run %shewitt run%s to start a workspace.\n",
-						ansiBoldCyan, ansiReset)
+					_, err := fmt.Fprintf(cmd.ErrOrStderr(), "Onboarding complete. Run %shewitt%s to select an agent.\n", ansiBoldCyan, ansiReset)
 					return err
 				}
-				return executeRun(cmd, &cfg, opts, false)
 			}
-			return cmd.Help()
+			return executeRun(cmd, &cfg, opts, false)
 		},
 	}
 	cmd.SetVersionTemplate("hewitt {{.Version}}\n")
