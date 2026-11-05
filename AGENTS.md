@@ -38,7 +38,8 @@ do not make separate API credits a prerequisite.
 - `agent`: native Claude Code, Codex, OpenCode, Pi, and Antigravity run/login descriptions (`agent.Names` lists them) and default image
   tags, independent of Cobra.
 - `images`: unified workspace Docker image with on-demand agent installation
-  (`hewitt-agent`) and the egress proxy. Keep default GHCR tags aligned with the
+  (`hewitt-agent`), Node/npm, Go, Python/venv, native build tools, and the egress proxy.
+  Keep default GHCR tags aligned with the
   Makefile; images contain no login state.
 - `profile`: private agent-scoped directories for native client state and the
   shared `<data_dir>/tools` cache; credentials are managed by the native clients.

@@ -105,6 +105,36 @@ hewitt run codex          # host window 3: same container, branch codex-2
 hewitt shell              # another connection: shell in the base checkout
 ```
 
+### Project dependencies
+
+The workspace image includes Node.js/npm, Go 1.26, Python 3 with pip and venv,
+Make, GCC/G++, and pkg-config. Native npm modules can compile through node-gyp.
+Project dependencies are installed inside each agent's worktree, for example
+`npm ci`, `python3 -m venv .venv` followed by `.venv/bin/pip install -r requirements.txt`,
+or `go mod download`. Host dependencies and uncommitted files are not copied.
+These tools require a rebuilt workspace image.
+
+Projects needing other runtimes, OS libraries, or specific tool versions should
+extend the workspace image and select it with `image` in `hewitt.yml` or
+`--image`. For example:
+
+```dockerfile
+FROM ghcr.io/hewitt-iso/hewitt:latest
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000
+```
+
+```sh
+docker build -t my-project:hewitt -f Dockerfile.hewitt .
+hewitt run codex --image my-project:hewitt
+```
+
+Hewitt does not infer or install every project's system dependencies. Restricted
+and hardened workspaces also need dependency registry hosts in `egress.allow`.
+Keep image builds and package installs free of credentials.
+
 Use your host tmux's prefix and detach keys as usual. `exit` or Ctrl-D closes
 a shell; Ctrl-C cancels its current command. Exiting one process leaves the
 workspace container and other agents running. Outside tmux, `run` warns that the

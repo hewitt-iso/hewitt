@@ -1,3 +1,5 @@
+FROM golang:1.26-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS go-toolchain
+
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS base
 LABEL org.opencontainers.image.source="https://github.com/hewitt-iso/hewitt"
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,6 +34,15 @@ RUN python3 /tmp/test-terminal-colors.py
 
 FROM base AS hewitt
 COPY --from=tmux-build /usr/local/bin/tmux /usr/local/bin/tmux
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+# Agents need project tools as well as their own CLI. Python and a compiler
+# are also required by node-gyp when an npm dependency has no prebuilt binary.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/local/go/bin:/hewitt/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Agent commands often use bash -lc, whose /etc/profile resets Docker's PATH.
+RUN printf 'export PATH="/usr/local/go/bin:/hewitt/tools/bin:$PATH"\n' > /etc/profile.d/hewitt-tools.sh
 RUN test "$(tmux -V)" = "tmux 3.8"
 LABEL org.opencontainers.image.description="Hewitt unified workspace environment for coding agents"
 COPY --chmod=0755 hewitt-agent /usr/local/bin/hewitt-agent
