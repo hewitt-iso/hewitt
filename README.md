@@ -202,7 +202,7 @@ ssh requires.
   `/run/host-services/ssh-auth.sock` is used. It is root-owned in some Docker
   Desktop versions, so a non-root session may get "permission denied".
 - Restricted and hardened sessions refuse `--ssh`: their egress proxy carries
-  only HTTP(S).
+  only tunnels to allowed hosts.
 
 ### Worktree workspace (legacy)
 
@@ -328,7 +328,7 @@ limits:                          # applied only when set
   pids: 512
 env_file: .env.agent             # API keys as KEY=VALUE; default .env.agent if present
 egress:
-  allow: [pypi.org, "*.pythonhosted.org"]
+  allow: [pypi.org, "*.pythonhosted.org", "otel.example.com:4318"]  # host (port 443) or host:port
   image: hewitt/egress:local
 danger: [host-paths]             # network | host-paths | writable-root | symlinks
 ```
@@ -337,6 +337,13 @@ Weakening an isolation level (read-write host paths, a writable root, a
 non-proxy network, symlinked mount sources) is refused unless the matching
 `danger` item (or `--danger`) is given. `exec` mode accepts only `agent`,
 `mode`, `target`, `workdir`, `isolation: shared`, and `danger`.
+
+The egress proxy of restricted and hardened sessions passes only `CONNECT`
+tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
+unless an entry names another port (`host:port`). A port opens for that host
+only. Plain HTTP requests through the proxy are refused, so clients must use
+HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
+for an `http://` endpoint.
 
 ## Publish agent images
 
