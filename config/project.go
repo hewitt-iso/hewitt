@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -57,6 +60,9 @@ type Project struct {
 	Allow       []string
 	EgressImage string
 	Danger      []string
+	// Telemetry is an OTLP/HTTP base URL (scheme://host[:port]) that
+	// supported agents export OpenTelemetry data to. It is not a credential.
+	Telemetry string
 }
 
 // Allowed values shared by the file loader and command-line validation.
@@ -95,7 +101,10 @@ type projectYAML struct {
 		Allow []string `yaml:"allow"`
 		Image string   `yaml:"image"`
 	} `yaml:"egress"`
-	Danger []string `yaml:"danger"`
+	Danger    []string `yaml:"danger"`
+	Telemetry struct {
+		Endpoint string `yaml:"endpoint"`
+	} `yaml:"telemetry"`
 }
 
 // workspaceYAML accepts either a bare type (workspace: copy) or a mapping with
@@ -177,6 +186,7 @@ func ParseProject(data []byte, name string) (Project, error) {
 		Isolation: y.Isolation, RootFS: y.RootFS, Network: y.Network, Runtime: y.Runtime,
 		Memory: y.Limits.Memory, CPUs: y.Limits.CPUs, PIDs: y.Limits.PIDs,
 		EnvFile: y.EnvFile, Allow: y.Egress.Allow, EgressImage: y.Egress.Image, Danger: y.Danger,
+		Telemetry: y.Telemetry.Endpoint,
 	}
 	if err := p.validate(y.Workspace); err != nil {
 		return Project{}, fmt.Errorf("%s: %w", name, err)
@@ -235,5 +245,36 @@ func (p *Project) validate(w workspaceYAML) error {
 			return fmt.Errorf("mounts and egress.allow entries must be nonempty")
 		}
 	}
+	if p.Telemetry != "" {
+		endpoint, err := TelemetryEndpoint(p.Telemetry)
+		if err != nil {
+			return err
+		}
+		p.Telemetry = endpoint
+	}
 	return nil
+}
+
+var telemetryHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+
+// TelemetryEndpoint validates an OTLP/HTTP base URL and returns it as
+// scheme://host[:port]. Credentials, paths, and queries are refused: agents
+// append the signal paths, and headers belong in the env file.
+func TelemetryEndpoint(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	invalid := fmt.Errorf("telemetry.endpoint %q must be http:// or https:// followed by a lowercase host and optional port", raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || !telemetryHost.MatchString(u.Hostname()) {
+		return "", invalid
+	}
+	if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return "", fmt.Errorf("telemetry.endpoint %q must not contain credentials, a path, or a query; put headers in env_file", raw)
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return "", invalid
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return "", invalid
+	}
+	return u.Scheme + "://" + u.Host, nil
 }

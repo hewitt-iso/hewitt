@@ -331,6 +331,8 @@ egress:
   allow: [pypi.org, "*.pythonhosted.org", "otel.example.com:4318"]  # host (port 443) or host:port
   image: hewitt/egress:local
 danger: [host-paths]             # network | host-paths | writable-root | symlinks
+telemetry:
+  endpoint: https://otel.example.com:4318  # OTLP/HTTP collector; see OpenTelemetry
 ```
 
 Weakening an isolation level (read-write host paths, a writable root, a
@@ -345,6 +347,55 @@ only, and `run` warns about each such entry because its traffic need not be
 HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
 HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
 for an `http://` endpoint.
+
+## OpenTelemetry
+
+Hewitt does not enable telemetry by default. Set `telemetry.endpoint` in
+`hewitt.yml` to an OTLP/HTTP collector, such as an OpenTelemetry Collector,
+Langfuse, or Phoenix, and `run` configures every agent that supports it:
+
+```yaml
+telemetry:
+  endpoint: https://otel.example.com:4318   # scheme://host[:port]; no path or credentials
+```
+
+| Agent | Exports | Configured by Hewitt as | Through the egress proxy |
+|---|---|---|---|
+| Claude Code | logs, metrics | `CLAUDE_CODE_ENABLE_TELEMETRY` and `OTEL_*` variables | `http://` and `https://` |
+| Codex | logs, traces | `-c otel.exporter` and `otel.trace_exporter` overrides | `https://` only |
+| OpenCode | logs, traces | `OTEL_EXPORTER_OTLP_ENDPOINT` | logs only, `https://` only |
+| Pi | none built in | | |
+| Antigravity | none built in | | |
+
+Collector credentials are not configuration: put headers such as
+`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <credentials>` in the env file,
+which Claude Code and OpenCode read; keep that file out of Git. Codex takes
+headers only from its own `config.toml`, so Hewitt sends its data without them.
+Codex metrics need its `analytics_enabled` switch, which Hewitt leaves alone.
+OpenCode adds spans for model calls when its own config sets
+`experimental.openTelemetry: true`. Agents export as soon as they start, even
+before login; Claude Code records prompt text only with `OTEL_LOG_USER_PROMPTS=1`.
+
+The endpoint must be reachable from the container:
+
+- `shared` and `isolated` sessions use Docker's default bridge network.
+  `localhost` is the container itself. Docker Desktop resolves
+  `host.docker.internal` to the host; Linux does not, and a host firewall such
+  as ufw usually drops traffic from `docker0`. Prefer a collector reachable by
+  DNS name, or allow the bridge in the host firewall and listen on the bridge
+  address (usually `172.17.0.1`), not `127.0.0.1`.
+- `restricted` and `hardened` sessions reach the collector only through the
+  egress proxy, and `run` adds the endpoint's host and port to its allowlist.
+  The proxy refuses plain HTTP, and Codex and OpenCode send plain HTTP to an
+  `http://` endpoint, so use `https://`; `run` warns otherwise, and warns that a
+  port other than 443 is not limited to HTTPS. OpenCode's trace exporter
+  ignores the proxy, so only its logs arrive. The proxy resolves the name from
+  Docker's default network; names that exist only inside another Docker network
+  do not work.
+
+Codex support comes from `hewitt-agent` in the workspace image and needs an
+image that includes it. `exec` mode refuses `telemetry`, since the external
+container's own configuration applies.
 
 ## Publish agent images
 
