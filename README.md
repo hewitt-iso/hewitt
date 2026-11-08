@@ -135,6 +135,13 @@ Hewitt does not infer or install every project's system dependencies. Restricted
 and hardened workspaces also need dependency registry hosts in `egress.allow`.
 Keep image builds and package installs free of credentials.
 
+Codex runs with `--sandbox danger-full-access` inside the container: Docker
+provides the sandbox, retaining dropped capabilities and `no-new-privileges`.
+This avoids a nested namespace sandbox that cannot start under these restrictions.
+Codex's approval policy still applies. Processes can access the workspace,
+profiles, and mounts granted to that container; use separate workspaces for
+separate security boundaries.
+
 Use your host tmux's prefix and detach keys as usual. `exit` or Ctrl-D closes
 a shell; Ctrl-C cancels its current command. Exiting one process leaves the
 workspace container and other agents running. Outside tmux, `run` warns that the

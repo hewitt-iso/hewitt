@@ -39,6 +39,8 @@ do not make separate API credits a prerequisite.
   tags, independent of Cobra.
 - `images`: unified workspace Docker image with on-demand agent installation
   (`hewitt-agent`), Node/npm, Go, Python/venv, native build tools, and the egress proxy.
+  Codex uses Docker as its sandbox; do not enable privileged mode or additional
+  capabilities to make its nested namespace sandbox work.
   Keep default GHCR tags aligned with the
   Makefile; images contain no login state.
 - `profile`: private agent-scoped directories for native client state and the
