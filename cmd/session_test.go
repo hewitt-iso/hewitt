@@ -128,7 +128,7 @@ func executeCommand(t *testing.T, args ...string) (string, error) {
 	root.SetArgs(args)
 	err := root.Execute()
 	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
-		if len(args) > 0 && args[0] == "run" && strings.HasPrefix(line, "[hewitt] ") {
+		if len(args) > 0 && (args[0] == "run" || args[0] == "auth") && strings.HasPrefix(line, "[hewitt] ") {
 			continue
 		}
 		if line != "" {

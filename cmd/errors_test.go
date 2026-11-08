@@ -101,3 +101,12 @@ func TestIdleWorkspaceIsExplained(t *testing.T) {
 		t.Fatalf("ps with agent = %q, %v", out, err)
 	}
 }
+
+func TestMissingAgentHintNamesCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, err := executeCommand(t, "auth", "relogin")
+	var missing *missingAgentError
+	if !errors.As(err, &missing) || !strings.Contains(missing.Hint(), "hewitt auth relogin codex") {
+		t.Fatalf("error = %v", err)
+	}
+}

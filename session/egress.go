@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/hewitt-iso/hewitt/docker"
@@ -38,32 +40,20 @@ func proxyEnv() []string {
 }
 
 // createEgress creates an internal network and a stopped proxy container that
-// reaches the outside through Docker's default network and permits HTTPS only
-// to hosts. Nothing is started; on failure, created resources are reported.
+// reaches the outside through Docker's default network and permits only
+// tunnels to the allowed hosts. Nothing is started; on failure, created
+// resources are reported.
 func createEgress(ctx context.Context, dataDir, image string, hosts []string) (Egress, error) {
-	for _, host := range hosts {
-		if !egressHost.MatchString(host) {
-			return Egress{}, fmt.Errorf("egress.allow host %q must be a lowercase DNS name, optionally prefixed with *.", host)
-		}
+	allow, conf, err := egressConfig(hosts)
+	if err != nil {
+		return Egress{}, err
 	}
 	token := strings.ToLower(rand.Text())
 	e := Egress{Network: "hewitt-egress-" + token, ConfigDir: filepath.Join(dataDir, "egress", token), Hosts: hosts}
 	if err := os.MkdirAll(e.ConfigDir, 0o700); err != nil {
 		return e, fmt.Errorf("create egress configuration: %w", err)
 	}
-	var allow strings.Builder
-	for _, host := range hosts {
-		// tinyproxy matches the requested host with POSIX basic expressions.
-		name, wildcard := strings.CutPrefix(host, "*.")
-		quoted := strings.ReplaceAll(name, ".", `\.`)
-		fmt.Fprintf(&allow, "^%s$\n", quoted)
-		if wildcard {
-			fmt.Fprintf(&allow, `\.%s$`+"\n", quoted)
-		}
-	}
-	conf := "Port " + egressPort + "\nListen 0.0.0.0\nTimeout 600\nMaxClients 100\nLogLevel Notice\n" +
-		"DisableViaHeader Yes\nConnectPort 443\nFilterDefaultDeny Yes\nFilter \"/hewitt/egress/allow\"\n"
-	for name, content := range map[string]string{"allow": allow.String(), "tinyproxy.conf": conf} {
+	for name, content := range map[string]string{"allow": allow, "tinyproxy.conf": conf} {
 		if err := os.WriteFile(filepath.Join(e.ConfigDir, name), []byte(content), 0o600); err != nil {
 			return e, fmt.Errorf("write egress configuration: %w", err)
 		}
@@ -86,6 +76,53 @@ func createEgress(ctx context.Context, dataDir, image string, hosts []string) (E
 		return e, err
 	}
 	return e, nil
+}
+
+// egressConfig renders the tinyproxy filter and configuration for hosts, each
+// "host" (port 443) or "host:port". The filter matches the whole request
+// target, so only CONNECT to a listed host and port passes; plain HTTP
+// requests carry a full URL, match no rule, and are refused.
+func egressConfig(hosts []string) (allow, conf string, err error) {
+	var filter strings.Builder
+	var ports []string
+	for _, entry := range hosts {
+		host, port, hasPort := strings.Cut(entry, ":")
+		if !hasPort {
+			port = "443"
+		}
+		if !egressHost.MatchString(host) {
+			return "", "", fmt.Errorf("egress.allow host %q must be a lowercase DNS name, optionally prefixed with *.", entry)
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return "", "", fmt.Errorf("egress.allow entry %q must use a port from 1 to 65535", entry)
+		}
+		if !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+		name, wildcard := strings.CutPrefix(host, "*.")
+		quoted := strings.ReplaceAll(name, ".", `\.`)
+		fmt.Fprintf(&filter, "^%s:%s$\n", quoted, port)
+		if wildcard {
+			fmt.Fprintf(&filter, `\.%s:%s$`+"\n", quoted, port)
+		}
+	}
+	conf = "Port " + egressPort + "\nListen 0.0.0.0\nTimeout 600\nMaxClients 100\nLogLevel Notice\nDisableViaHeader Yes\n"
+	for _, port := range ports {
+		conf += "ConnectPort " + port + "\n"
+	}
+	conf += "FilterURLs On\nFilterExtended On\nFilterDefaultDeny Yes\nFilter \"/hewitt/egress/allow\"\n"
+	return filter.String(), conf, nil
+}
+
+// openPorts lists the entries that name a port other than 443.
+func openPorts(hosts []string) []string {
+	var open []string
+	for _, entry := range hosts {
+		if _, port, ok := strings.Cut(entry, ":"); ok && port != "443" {
+			open = append(open, entry)
+		}
+	}
+	return open
 }
 
 func (e Egress) preserved() string {

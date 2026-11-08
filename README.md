@@ -202,7 +202,7 @@ ssh requires.
   `/run/host-services/ssh-auth.sock` is used. It is root-owned in some Docker
   Desktop versions, so a non-root session may get "permission denied".
 - Restricted and hardened sessions refuse `--ssh`: their egress proxy carries
-  only HTTP(S).
+  only tunnels to allowed hosts.
 
 ### Worktree workspace (legacy)
 
@@ -225,6 +225,10 @@ commit it. Login output is not recorded by Docker.
 Sessions may share a profile. Codex refreshes its own tokens in the shared
 `auth.json` and reloads it when another session has already refreshed; if two
 sessions refresh at the same moment, one may need `hewitt login codex` again.
+
+`hewitt auth relogin <agent>` runs the native logout and then the native login
+for one agent and profile, each in its own preserved container. It stops
+without logging in if logout fails.
 
 Pi (`@earendil-works/pi-coding-agent`) logs in only through its `/login`
 command, so `hewitt login pi` starts Pi and types `/login` for you; pick a
@@ -324,7 +328,7 @@ limits:                          # applied only when set
   pids: 512
 env_file: .env.agent             # API keys as KEY=VALUE; default .env.agent if present
 egress:
-  allow: [pypi.org, "*.pythonhosted.org"]
+  allow: [pypi.org, "*.pythonhosted.org", "otel.example.com:4318"]  # host (port 443) or host:port
   image: hewitt/egress:local
 danger: [host-paths]             # network | host-paths | writable-root | symlinks
 ```
@@ -333,6 +337,14 @@ Weakening an isolation level (read-write host paths, a writable root, a
 non-proxy network, symlinked mount sources) is refused unless the matching
 `danger` item (or `--danger`) is given. `exec` mode accepts only `agent`,
 `mode`, `target`, `workdir`, `isolation: shared`, and `danger`.
+
+The egress proxy of restricted and hardened sessions passes only `CONNECT`
+tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
+unless an entry names another port (`host:port`). A port opens for that host
+only, and `run` warns about each such entry because its traffic need not be
+HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
+HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
+for an `http://` endpoint.
 
 ## Publish agent images
 
