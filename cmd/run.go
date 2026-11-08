@@ -23,6 +23,9 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	switch action {
 	case "login":
 		short = "Log in to a subscription using the native agent in a container"
+	case "relogin":
+		short = "Log out and log in again using the native agent in a container"
+		exampleAction = "auth relogin"
 	case "status":
 		short = "Show native authentication status for a profile"
 		exampleAction = "auth status"
@@ -35,7 +38,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 		Long:      short + ".\n\nAll agents use ghcr.io/hewitt-iso/hewitt:latest by default (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B, D to detach; hewitt attach reconnects to the same terminal. Ctrl-C and Ctrl-D are handled by the agent.\nRun keeps the session repository in a Docker volume; the host repository is only read.\nhewitt sync imports the session branches as hewitt/<name>/<branch>.",
 		Example:   "  hewitt " + exampleAction + " codex --profile personal",
 		ValidArgs: append(slices.Clone(agent.Names), "gemini", "copilot"),
-		Args:      cobra.MatchAll(cobra.ExactArgs(1), validAgent),
+		Args:      cobra.MatchAll(requireAgent, cobra.MaximumNArgs(1), validAgent),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("image") && image == "" {
 				return fmt.Errorf("image must be nonempty")
@@ -96,6 +99,14 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	cmd.Flags().BoolVar(&ssh, "ssh", false, "forward the host ssh-agent so the agent can push over SSH")
 	cmd.Flags().StringSliceVar(&danger, "danger", nil, "explicitly allow weakening: network, host-paths, writable-root, symlinks")
 	return cmd
+}
+
+// requireAgent names the missing agent instead of Cobra's argument count.
+func requireAgent(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return &missingAgentError{Command: cmd.CommandPath()}
+	}
+	return nil
 }
 
 // validAgent names the supported agents instead of Cobra's bare "invalid argument".

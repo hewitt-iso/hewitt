@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/hewitt-iso/hewitt/agent"
 )
 
 // hinter is implemented by errors that know what the user can do next. Packages
@@ -60,6 +62,14 @@ func (e *unknownAgentError) Hint() string {
 		return "to return to a running session, use hewitt attach " + e.Name
 	}
 	return "hewitt run without an agent shows a picker"
+}
+
+// missingAgentError is an authentication command run without an agent.
+type missingAgentError struct{ Command string }
+
+func (*missingAgentError) Error() string { return "no agent specified" }
+func (e *missingAgentError) Hint() string {
+	return fmt.Sprintf("pass an agent, for example %s codex (supported: %s)", e.Command, strings.Join(agent.Names, ", "))
 }
 
 // missingSessionError is a session command run without a terminal for the picker.

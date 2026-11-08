@@ -226,6 +226,10 @@ Sessions may share a profile. Codex refreshes its own tokens in the shared
 `auth.json` and reloads it when another session has already refreshed; if two
 sessions refresh at the same moment, one may need `hewitt login codex` again.
 
+`hewitt auth relogin <agent>` runs the native logout and then the native login
+for one agent and profile, each in its own preserved container. It stops
+without logging in if logout fails.
+
 Pi (`@earendil-works/pi-coding-agent`) logs in only through its `/login`
 command, so `hewitt login pi` starts Pi and types `/login` for you; pick a
 provider and paste the code it shows. `hewitt auth status pi` lists the models

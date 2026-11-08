@@ -187,6 +187,11 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 		{args: []string{"run", "codex", "--image", "test", "--profile", "../escape"}, want: "profile must"},
 		{args: []string{"run", "gemini", "--image", "test"}, want: "no implemented adapter"},
 		{args: []string{"login", "codex"}, want: "Docker CLI not found"},
+		{args: []string{"auth", "relogin", "codex"}, want: "relogin: logout"},
+		{args: []string{"auth", "relogin"}, want: "no agent specified"},
+		{args: []string{"auth", "logout", "codex", "extra"}, want: "accepts at most 1 arg(s)"},
+		{args: []string{"auth", "relogin", "gemini"}, want: "no implemented adapter"},
+		{args: []string{"auth", "relogin", "codex", "--profile", "../escape"}, want: "profile must"},
 		{args: []string{"login", "claude", "--image", "test", "--profile", ""}, want: "profile must"},
 		{args: []string{"run", "codex", "--image", "test"}, want: "locate repository"},
 	} {
@@ -206,6 +211,10 @@ func TestRunValidationAndHelpWithoutDocker(t *testing.T) {
 	}
 	if _, err := executeCommand(t, "login", "--help", "--config", filepath.Join(home, "missing.json")); err != nil {
 		t.Fatalf("login help requires configuration: %v", err)
+	}
+	out, err = executeCommand(t, "auth", "relogin", "--help", "--config", filepath.Join(home, "missing.json"))
+	if err != nil || !strings.Contains(out, "hewitt auth relogin codex") {
+		t.Fatalf("relogin help = %q, %v", out, err)
 	}
 }
 

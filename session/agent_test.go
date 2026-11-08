@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hewitt-iso/hewitt/profile"
 )
 
 const adapterTestID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -131,4 +134,91 @@ func runRepository(t *testing.T) {
 		}
 	}
 	t.Chdir(dir)
+}
+
+// fakeAuthDocker records Docker calls; the attached logout exits nonzero when failLogout is set.
+func fakeAuthDocker(t *testing.T, failLogout bool) string {
+	t.Helper()
+	bin := t.TempDir()
+	log := filepath.Join(bin, "calls")
+	t.Setenv("HEWITT_CALLS", log)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	exit := ""
+	if failLogout {
+		exit = `if [ "$3" = "--attach" ] && grep -q '^logout$' "$HEWITT_CALLS"; then exit 1; fi`
+	}
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$HEWITT_CALLS"
+case "$2" in
+create) printf '%s\n' '` + adapterTestID + `' ;;
+start) ` + exit + ` ;;
+inspect) printf '%s\n' '{"Status":"exited","ExitCode":0}' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+func TestReloginLogsOutBeforeLogin(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failLogout=%v", fail), func(t *testing.T) {
+			log := fakeAuthDocker(t, fail)
+			opts := AgentOptions{Agent: "codex", Image: "agent:test", Profile: "personal", DataDir: t.TempDir()}
+			var stderr bytes.Buffer
+			err := Authenticate(context.Background(), opts, "relogin", strings.NewReader(""), io.Discard, &stderr)
+			calls, readErr := os.ReadFile(log)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			logout, login := strings.Index(string(calls), "\nlogout\n"), strings.Index(string(calls), "\n--device-auth\n")
+			if !strings.Contains(stderr.String(), "Relogin 1/2: logging out of codex (profile personal)") {
+				t.Fatalf("relogin progress = %q", stderr.String())
+			}
+			if fail {
+				if err == nil || !strings.Contains(err.Error(), "relogin: logout") || login != -1 || strings.Contains(stderr.String(), "2/2") {
+					t.Fatalf("failed logout: err = %v, calls = %s", err, calls)
+				}
+				return
+			}
+			if err != nil || logout == -1 || login == -1 || logout > login || !strings.Contains(stderr.String(), "Relogin 2/2") {
+				t.Fatalf("relogin: err = %v, calls = %s", err, calls)
+			}
+		})
+	}
+}
+
+func TestReloginReplacesClaudeToken(t *testing.T) {
+	fakeAuthDocker(t, false)
+	data := t.TempDir()
+	dir, err := profile.Prepare(data, "claude", "personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SaveToken(dir, "CLAUDE_CODE_OAUTH_TOKEN", "old-token"); err != nil {
+		t.Fatal(err)
+	}
+	// A file is passed to Docker directly, so the token remains to be read after login.
+	input := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(input, []byte("new-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	opts := AgentOptions{Agent: "claude", Image: "agent:test", Profile: "personal", DataDir: data}
+	if err := Authenticate(context.Background(), opts, "relogin", in, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	path, err := profile.TokenFile(dir)
+	if err != nil || path == "" {
+		t.Fatalf("token file %q, %v", path, err)
+	}
+	token, err := os.ReadFile(path)
+	if err != nil || string(token) != "CLAUDE_CODE_OAUTH_TOKEN=new-token\n" {
+		t.Fatalf("token = %q, %v", token, err)
+	}
 }

@@ -407,17 +407,53 @@ func Login(ctx context.Context, opts AgentOptions, in io.Reader, out, stderr io.
 	return Authenticate(ctx, opts, "login", in, out, stderr)
 }
 
-// Authenticate delegates credential operations to the native client.
-// It preserves both the profile and the operation container.
+// Authenticate validates the agent, profile, and image once, then runs the
+// credential operation. Relogin runs logout and then login, each in its own
+// container, and stops if logout fails. Containers and profiles are preserved.
 func Authenticate(ctx context.Context, opts AgentOptions, operation string, in io.Reader, out, stderr io.Writer) error {
-	if operation != "login" && operation != "status" && operation != "logout" {
-		return fmt.Errorf("unsupported authentication operation %q", operation)
-	}
-	create, dir, err := prepare(ctx, opts, operation)
+	adapter, err := agent.Lookup(opts.Agent)
 	if err != nil {
 		return err
 	}
-	if err := refreshImage(ctx, create.Image, stderr); err != nil {
+	if opts.Image == "" {
+		opts.Image = adapter.DefaultImage()
+	}
+	if err := (docker.CreateOptions{Image: opts.Image, Name: opts.Name}).Validate(); err != nil {
+		return err
+	}
+	if err := profile.ValidateID(opts.Profile); err != nil {
+		return err
+	}
+	if err := refreshImage(ctx, opts.Image, stderr); err != nil {
+		return err
+	}
+	switch operation {
+	case "login", "status", "logout":
+		return runAuthentication(ctx, opts, adapter, operation, in, out, stderr)
+	case "relogin":
+		if err := reportStep(stderr, fmt.Sprintf("Relogin 1/2: logging out of %s (profile %s)", opts.Agent, opts.Profile)); err != nil {
+			return err
+		}
+		if err := runAuthentication(ctx, opts, adapter, "logout", in, out, stderr); err != nil {
+			return fmt.Errorf("relogin: logout: %w", err)
+		}
+		if err := reportStep(stderr, fmt.Sprintf("Relogin 2/2: logging in to %s (profile %s)", opts.Agent, opts.Profile)); err != nil {
+			return err
+		}
+		if err := runAuthentication(ctx, opts, adapter, "login", in, out, stderr); err != nil {
+			return fmt.Errorf("relogin: login: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported authentication operation %q", operation)
+	}
+}
+
+// runAuthentication runs one native login, status, or logout in a new
+// container and keeps a long-lived token file in step with it.
+func runAuthentication(ctx context.Context, opts AgentOptions, adapter agent.Adapter, operation string, in io.Reader, out, stderr io.Writer) error {
+	create, dir, err := prepare(ctx, opts, operation)
+	if err != nil {
 		return err
 	}
 	store, err := NewStore(opts.DataDir)
@@ -435,9 +471,9 @@ func Authenticate(ctx context.Context, opts AgentOptions, operation string, in i
 	if err := (docker.Client{}).StartAttached(ctx, id, in, out, stderr); err != nil {
 		return err
 	}
-	adapter, err := agent.Lookup(opts.Agent)
-	if err != nil || adapter.TokenVariable() == "" {
-		return err
+	// Clients without a token variable keep their login in their own files.
+	if adapter.TokenVariable() == "" {
+		return nil
 	}
 	switch operation {
 	case "login":
