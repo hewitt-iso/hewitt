@@ -92,9 +92,23 @@ ensure_agent() {
 # file lives in XDG_DATA_HOME, inside the private profile, which is what protects
 # it; the fixed password only lets the daemon create and unlock it without a
 # graphical prompt.
+# codex_otel holds Codex's OTLP log and trace exporters for
+# HEWITT_OTEL_ENDPOINT, which Hewitt validates as scheme://host[:port]. Codex
+# reads no OTEL_* variables, and metrics would require its analytics switch.
+codex_otel=()
+if [ -n "${HEWITT_OTEL_ENDPOINT:-}" ]; then
+	codex_otel=(
+		-c "otel.exporter={otlp-http={endpoint=\"$HEWITT_OTEL_ENDPOINT/v1/logs\",protocol=\"binary\"}}"
+		-c "otel.trace_exporter={otlp-http={endpoint=\"$HEWITT_OTEL_ENDPOINT/v1/traces\",protocol=\"binary\"}}"
+	)
+fi
+
 launch() {
 	local binary="$1"
 	shift
+	if [ "$binary" = "codex" ]; then
+		exec codex "${codex_otel[@]}" "$@"
+	fi
 	if [ "$binary" != "agy" ]; then
 		exec "$binary" "$@"
 	fi
@@ -227,7 +241,7 @@ exec_agent() {
 			-u OPENAI_BASE_URL \
 			-u OPENAI_IDENTITY_TOKEN_FILE \
 			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
-			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "$@"
+			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@"
 		;;
 	opencode)
 		export OPENCODE_DISABLE_AUTOUPDATE=1

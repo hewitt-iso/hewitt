@@ -150,6 +150,7 @@ func (s settings) check() error {
 			{"image", s.Image}, {"name", s.Name}, {"profile", s.Profile}, {"workspace", s.Workspace}, {"git", s.Git},
 			{"rootfs", s.RootFS}, {"network", s.Network}, {"runtime", s.Runtime},
 			{"limits.memory", s.Memory}, {"limits.cpus", s.CPUs}, {"limits.pids", s.PIDs}, {"rules", s.Rules}, {"env_file", s.EnvFile}, {"egress.image", s.EgressImage},
+			{"telemetry.endpoint", s.Telemetry},
 		} {
 			if field.value != "" {
 				return fmt.Errorf("%s is not supported in exec mode; the external container's own configuration applies", field.name)
@@ -229,7 +230,7 @@ func (s settings) check() error {
 		return fmt.Errorf("hardened isolation requires runtime naming a separate sandbox runtime, such as runsc or kata-runtime")
 	}
 	if s.SSH && s.egress() {
-		return fmt.Errorf("ssh needs direct network access; the %s egress proxy carries only HTTP(S)", s.Isolation)
+		return fmt.Errorf("ssh needs direct network access; the %s egress proxy carries only tunnels to allowed hosts", s.Isolation)
 	}
 	if (len(s.Allow) > 0 || s.EgressImage != "") && !s.egress() {
 		return fmt.Errorf("egress.allow and egress.image apply only to restricted or hardened sessions without network")

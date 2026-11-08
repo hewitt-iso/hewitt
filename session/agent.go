@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -278,6 +279,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		create.Env = append(create.Env, "HEWITT_WORKSPACE_MODE=copy")
 	}
 	create.Env = append(create.Env, "HEWITT_PROJECT_NAME="+projectName)
+	if s.Telemetry != "" {
+		create.Env = append(create.Env, telemetryEnv(s.Telemetry)...)
+	}
 	if s.egress() {
 		image := s.EgressImage
 		if image == "" {
@@ -296,14 +300,24 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if err := reportStep(stderr, "Preparing network and egress proxy"); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
-		e, err := createEgress(ctx, opts.DataDir, image, append(hosts, s.Allow...))
+		allow := s.Allow
+		if s.Telemetry != "" {
+			allow = append(slices.Clone(allow), telemetryAllow(s.Telemetry))
+		}
+		e, err := createEgress(ctx, opts.DataDir, image, append(hosts, allow...))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
 		m.Egress = &e
 		preserved += "; " + e.preserved()
-		if open := openPorts(s.Allow); len(open) > 0 {
+		if open := openPorts(allow); len(open) > 0 {
 			if err := warn(stderr, "egress.allow opens ports other than 443, where traffic need not be HTTPS: %s", strings.Join(open, ", ")); err != nil {
+				return "", fmt.Errorf("%s: %w", preserved, err)
+			}
+		}
+		if strings.HasPrefix(s.Telemetry, "http://") {
+			// The proxy refuses plain HTTP; only Claude Code tunnels an http:// endpoint.
+			if err := warn(stderr, "telemetry.endpoint uses http://; through the egress proxy only Claude Code delivers it, so use https:// for Codex and OpenCode"); err != nil {
 				return "", fmt.Errorf("%s: %w", preserved, err)
 			}
 		}
