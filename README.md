@@ -341,7 +341,8 @@ non-proxy network, symlinked mount sources) is refused unless the matching
 The egress proxy of restricted and hardened sessions passes only `CONNECT`
 tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
 unless an entry names another port (`host:port`). A port opens for that host
-only. Plain HTTP requests through the proxy are refused, so clients must use
+only, and `run` warns about each such entry because its traffic need not be
+HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
 HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
 for an `http://` endpoint.
 

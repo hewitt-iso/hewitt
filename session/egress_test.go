@@ -31,3 +31,10 @@ func TestEgressConfigRejectsInvalidEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenPortsListsNonHTTPSEntries(t *testing.T) {
+	got := openPorts([]string{"pypi.org", "mirror.local:443", "collector.local:4318"})
+	if len(got) != 1 || got[0] != "collector.local:4318" {
+		t.Fatalf("openPorts = %q", got)
+	}
+}

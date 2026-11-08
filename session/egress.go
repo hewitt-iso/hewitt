@@ -114,6 +114,17 @@ func egressConfig(hosts []string) (allow, conf string, err error) {
 	return filter.String(), conf, nil
 }
 
+// openPorts lists the entries that name a port other than 443.
+func openPorts(hosts []string) []string {
+	var open []string
+	for _, entry := range hosts {
+		if _, port, ok := strings.Cut(entry, ":"); ok && port != "443" {
+			open = append(open, entry)
+		}
+	}
+	return open
+}
+
 func (e Egress) preserved() string {
 	return fmt.Sprintf("egress proxy %q and network %q preserved", e.Proxy, e.Network)
 }

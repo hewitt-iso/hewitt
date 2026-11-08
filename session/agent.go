@@ -302,6 +302,11 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 		m.Egress = &e
 		preserved += "; " + e.preserved()
+		if open := openPorts(s.Allow); len(open) > 0 {
+			if err := warn(stderr, "egress.allow opens ports other than 443, where traffic need not be HTTPS: %s", strings.Join(open, ", ")); err != nil {
+				return "", fmt.Errorf("%s: %w", preserved, err)
+			}
+		}
 		create.Network = e.Network
 		create.Env = append(create.Env, proxyEnv()...)
 	}
