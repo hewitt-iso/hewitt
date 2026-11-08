@@ -346,6 +346,44 @@ HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
 HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
 for an `http://` endpoint.
 
+## OpenTelemetry
+
+Hewitt does not enable telemetry. Agents export it themselves when their own
+OpenTelemetry settings are present, so a collector such as an OpenTelemetry
+Collector, Langfuse, or Phoenix receives what the native client sends. Pass the
+settings through the env file; header values often carry collector credentials,
+so keep the file out of Git:
+
+```sh
+# .env.agent (read by run; see env_file in hewitt.yml)
+CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_METRICS_EXPORTER=otlp
+OTEL_LOGS_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.example.com:4318
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <credentials>
+```
+
+The endpoint must be reachable from the container:
+
+- `shared` and `isolated` sessions use Docker's default bridge network.
+  `localhost` is the container itself. Docker Desktop resolves
+  `host.docker.internal` to the host; Linux does not, and a host firewall such
+  as ufw usually drops traffic from `docker0`. Prefer a collector reachable by
+  DNS name, or allow the bridge in the host firewall and listen on the bridge
+  address (usually `172.17.0.1`), not `127.0.0.1`.
+- `restricted` and `hardened` sessions reach the collector only through the
+  egress proxy. Add its DNS name and port to `egress.allow`, for example
+  `otel.example.com:4318`; `run` warns that the port is not limited to HTTPS.
+  The proxy resolves the name from Docker's default network, so names that
+  exist only inside another Docker network do not work.
+
+Claude Code honors the proxy and tunnels OTLP through it even for an `http://`
+endpoint. It starts exporting before login, and records prompt text only when
+`OTEL_LOG_USER_PROMPTS=1` is set. Other agents configure telemetry
+differently (Codex reads an `[otel]` section of `config.toml` in its profile);
+Hewitt has verified the proxy path for Claude Code only.
+
 ## Publish agent images
 
 Maintainers can publish tested local builds to GHCR:
