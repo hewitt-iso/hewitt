@@ -180,6 +180,10 @@ for another checkout and `--base REF` to start at a specific commit, branch, or
 tag (default `HEAD`). The repository must have a commit. Login does not create
 a workspace.
 
+Docker availability is checked before the workspace name is anchored in Git,
+so a failed daemon connection can be retried with the same name. Failures after
+volume creation preserve the volume for inspection.
+
 ### Volume workspace (default)
 
 The session repository lives in the Docker volume `hewitt-<name>`, mounted at

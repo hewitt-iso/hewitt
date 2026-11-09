@@ -248,6 +248,32 @@ func TestVolumeSettingsChecks(t *testing.T) {
 	}
 }
 
+func TestVolumeDaemonFailureDoesNotReserveName(t *testing.T) {
+	runRepository(t)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fake := `#!/bin/sh
+case "$1 $2" in
+"volume inspect") printf 'permission denied while trying to connect to the Docker daemon socket\n' >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_, err := RunAgent(ctx, AgentOptions{Agent: "codex", Image: "agent:test", Name: "retry-me", DataDir: t.TempDir()}, io.Discard)
+	if err == nil {
+		t.Fatal("accepted an unavailable Docker daemon")
+	}
+	repo, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taken, err := workspace.NameTaken(ctx, repo, "retry-me"); err != nil || taken {
+		t.Fatalf("failed daemon check reserved the workspace name: %v, %v", taken, err)
+	}
+}
+
 func TestSSHAgentMount(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("Docker Desktop path")

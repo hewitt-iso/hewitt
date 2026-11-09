@@ -195,6 +195,13 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 			if len(s.WorkspaceArgs) > 0 {
 				base = s.WorkspaceArgs[0]
 			}
+			// Check Docker before anchoring the base in the host repository. A
+			// failed daemon connection must not reserve a name with no volume.
+			if exists, err := (docker.Client{}).VolumeExists(ctx, "hewitt-"+name); err != nil {
+				return "", err
+			} else if exists {
+				return "", fmt.Errorf("volume %q already exists; remove it or choose another --name", "hewitt-"+name)
+			}
 			if err := reportStep(stderr, "Preparing repository snapshot"); err != nil {
 				return "", err
 			}

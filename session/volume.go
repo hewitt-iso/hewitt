@@ -88,13 +88,6 @@ func helper(ctx context.Context, image string, v workspace.Volume, script string
 // On failure the volume is kept and named so it can be inspected.
 func createVolume(ctx context.Context, image string, v workspace.Volume, stderr io.Writer) error {
 	client := docker.Client{}
-	exists, err := client.VolumeExists(ctx, v.Volume)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return fmt.Errorf("volume %q already exists; remove it or choose another --name", v.Volume)
-	}
 	if err := reportStep(stderr, "Creating workspace volume"); err != nil {
 		return err
 	}
