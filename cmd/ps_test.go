@@ -160,7 +160,7 @@ func TestPSValidationAndHelp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"hewitt ps", "Examples:", "--config", "Docker is not required"} {
+		for _, want := range []string{"hewitt ps", "Examples:", "--config", "List saved sessions"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("help = %q, want %q", out, want)
 			}
