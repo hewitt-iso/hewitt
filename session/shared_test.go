@@ -67,7 +67,9 @@ esac
 			t.Fatalf("missing %q: %s", want, calls)
 		}
 	}
-	if strings.Contains(calls, "tmux") {
+	// TERM=tmux-256color is forwarded from host tmux; it is not a
+	// container tmux invocation.
+	if strings.Contains(calls, " tmux ") || strings.Contains(calls, " tmux\n") {
 		t.Fatalf("nested tmux: %s", calls)
 	}
 	opts.Separate = true

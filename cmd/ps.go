@@ -15,16 +15,8 @@ import (
 func newPSCommand(cfg *config.Config) *cobra.Command {
 	var all, noTrunc bool
 	cmd := &cobra.Command{
-		Use:   "ps",
-		Short: "List saved sessions",
-		Long: "List saved sessions from the configured data_dir in session ID order.\n" +
-			"By default, stopped sessions are omitted; use --all (-a) to include them.\n" +
-			"Shows 12-character short IDs (or full IDs with --no-trunc), agents, images,\n" +
-			"names, status, and creation times in UTC. Shared workspaces list their\n" +
-			"connected agents; a running one with none is idle (hewitt run opens one).\n" +
-			"An empty store prints only the table header. No files are created.\n\n" +
-			"Docker is not required; when Docker is unavailable, status is reported as\n" +
-			"unknown and all saved sessions are listed.",
+		Use:     "ps",
+		Short:   "List saved sessions",
 		Example: "  hewitt ps\n  hewitt ps -a\n  hewitt ps --no-trunc\n  hewitt ps --config /path/to/config.json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

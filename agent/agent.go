@@ -118,8 +118,11 @@ type Codex struct{}
 
 func (Codex) DefaultImage() string { return DefaultImage }
 
-func (Codex) Name() string       { return "codex" }
-func (Codex) Run() Invocation    { return codexInvocation() }
+func (Codex) Name() string { return "codex" }
+
+// Docker supplies the sandbox. Codex's nested namespace sandbox cannot run
+// with the container's dropped capabilities and no-new-privileges defaults.
+func (Codex) Run() Invocation    { return codexInvocation("--sandbox", "danger-full-access") }
 func (Codex) Login() Invocation  { return codexInvocation("login", "--device-auth") }
 func (Codex) Status() Invocation { return codexInvocation("login", "status") }
 func (Codex) Logout() Invocation { return codexInvocation("logout") }

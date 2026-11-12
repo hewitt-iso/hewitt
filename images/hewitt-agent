@@ -241,7 +241,7 @@ exec_agent() {
 			-u OPENAI_BASE_URL \
 			-u OPENAI_IDENTITY_TOKEN_FILE \
 			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
-			codex -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@"
+			codex --sandbox danger-full-access -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@"
 		;;
 	opencode)
 		export OPENCODE_DISABLE_AUTOUPDATE=1
