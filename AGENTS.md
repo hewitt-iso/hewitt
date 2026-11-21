@@ -113,6 +113,7 @@ do not make separate API credits a prerequisite.
 - Make small, reviewable changes. Explain changes to lifecycle ownership,
   persistence, or isolation before implementing them; avoid frameworks for future
   possibilities.
-- Update README examples and configuration documentation whenever behavior changes.
+- Update the README and the guides in `docs/` whenever behavior changes; keep the
+  README a short product overview and put reference material in `docs/`.
   Keep this file aligned with actual package responsibilities. Distinguish planned
   MVP capabilities from implemented commands. Do not create commits unless asked.
