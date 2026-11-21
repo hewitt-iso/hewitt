@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +32,9 @@ type Project struct {
 	// Dir is the absolute directory containing the file; relative paths resolve
 	// against it. It is empty when no file was found.
 	Dir string
+	// Path is the file's absolute path and Digest the SHA-256 of its contents;
+	// both are empty when no file was found.
+	Path, Digest string
 
 	Image, Agent, Profile, Name string
 	// Mode is new, exec, or sidecar; Target names the existing container for
@@ -147,7 +152,50 @@ func LoadProject(path, dir string) (Project, error) {
 		return Project{}, err
 	}
 	p.Dir = filepath.Dir(path)
+	sum := sha256.Sum256(data)
+	p.Path, p.Digest = path, hex.EncodeToString(sum[:])
 	return p, nil
+}
+
+// Sensitive lists the settings that a file arriving with a cloned repository
+// could use against its user: another image receives the agent profiles,
+// danger weakens isolation, host paths outside the file's directory are read,
+// and network settings, telemetry, or the forwarded ssh-agent open ways out.
+// Such a file must be trusted before it applies. Paths are checked lexically;
+// symlinks are refused later unless danger allows them.
+func (p Project) Sensitive() []string {
+	var keys []string
+	add := func(set bool, key string) {
+		if set {
+			keys = append(keys, key)
+		}
+	}
+	outside := func(spec string) bool {
+		path, _, _ := strings.Cut(spec, ":")
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(p.Dir, path)
+		}
+		rel, err := filepath.Rel(p.Dir, path)
+		return err != nil || !filepath.IsLocal(rel)
+	}
+	anyOutside := func(specs ...string) bool {
+		return slices.ContainsFunc(specs, func(spec string) bool { return spec != "" && outside(spec) })
+	}
+	add(p.Image != "", "image")
+	add(p.Mode == "exec" || p.Mode == "sidecar", "mode")
+	add(p.Workspace != "volume" && p.Workspace != "worktree" && anyOutside(p.WorkspaceArgs...), "workspace.paths")
+	add(p.SSH, "ssh")
+	add(anyOutside(p.Mounts...), "mounts")
+	add(anyOutside(p.Rules), "rules")
+	add(p.Isolation == "shared", "isolation")
+	add(p.Network != "", "network")
+	add(p.Runtime != "", "runtime")
+	add(anyOutside(p.EnvFile), "env_file")
+	add(len(p.Allow) > 0, "egress.allow")
+	add(p.EgressImage != "", "egress.image")
+	add(len(p.Danger) > 0, "danger")
+	add(p.Telemetry != "", "telemetry.endpoint")
+	return keys
 }
 
 func findProject(dir string) (string, error) {

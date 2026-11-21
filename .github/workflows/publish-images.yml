@@ -36,8 +36,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Build image
-        run: make image-hewitt
+      - name: Build images
+        run: make images
       - name: Smoke test as an arbitrary UID and GID
         run: |
           docker run --rm --user 12345:12345 --cap-drop ALL \
@@ -55,5 +55,5 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-      - name: Publish tested image
-        run: make push-hewitt
+      - name: Publish tested images
+        run: make push-images

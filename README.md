@@ -89,7 +89,7 @@ public for users to pull them without a registry login.
 To build locally instead (requires Docker and network access):
 
 ```sh
-make images  # builds hewitt:local and hewitt/egress:local
+make images  # builds hewitt:local and hewitt-egress:local
 # Or build only the workspace image:
 make image-hewitt
 ```
@@ -385,11 +385,22 @@ limits:                          # applied only when set
 env_file: .env.agent             # API keys as KEY=VALUE; default .env.agent if present
 egress:
   allow: [pypi.org, "*.pythonhosted.org", "otel.example.com:4318"]  # host (port 443) or host:port
-  image: hewitt/egress:local
+  image: ghcr.io/hewitt-iso/egress:latest
 danger: [host-paths]             # network | host-paths | writable-root | symlinks
 telemetry:
   endpoint: https://otel.example.com:4318  # OTLP/HTTP collector; see OpenTelemetry
 ```
+
+A `hewitt.yml` arrives with the repository, so settings that could expose agent
+logins or host files apply only after you trust the file: `image`, `mode: exec`
+or `sidecar`, `ssh`, `isolation: shared`, `network`, `runtime`, `egress.allow`,
+`egress.image`, `danger`, `telemetry.endpoint`, and `mounts`, `rules`,
+`env_file`, or `workspace.paths` outside the file's directory. In a terminal,
+`run` shows such a file and asks; otherwise it fails until you run
+`hewitt trust` (or `hewitt trust --file PATH`). Trust covers the file's current
+contents; after any change, `run` asks again. Files without these settings,
+such as one that selects the agent, base branch, and limits, need no trust.
+Command-line flags are your own input and need none either.
 
 Weakening an isolation level (read-write host paths, a writable root, a
 non-proxy network, symlinked mount sources) is refused unless the matching
@@ -471,17 +482,18 @@ password. Never put tokens in configuration, Dockerfiles, or source control.
 
 The **Publish agent images** GitHub Actions workflow runs every six hours
 (at 00:17, 06:17, 12:17, and 18:17 UTC) and can also be started manually.
-Scheduled runs install Codex's npm `latest` version and Claude Code's `latest`
-release channel. Manual runs can select exact versions or Claude's `stable`
-channel. Builds pull the pinned base image and disable Docker's build cache so
-upstream client and OS package updates are actually downloaded.
+Agents are not part of the images: they are installed into the tool cache on
+first use (see above) and are not updated by image releases. Scheduled builds
+pull the pinned base images and disable Docker's build cache, so they pick up
+Debian package updates.
 
-Each run rebuilds both images, checks the CLI under an arbitrary UID/GID,
-tests the container and tmux lifecycle, and publishes the tested image as
-`:latest` using the workflow's `GITHUB_TOKEN`. Failed checks prevent publishing
-that image, leaving the previously published tag available. Runs are serialized
-to avoid overlapping uploads. Images are rebuilt even if client versions have
-not changed, also refreshing base-image packages.
+Each run rebuilds the workspace image (`ghcr.io/hewitt-iso/hewitt`) and the
+egress proxy image (`ghcr.io/hewitt-iso/egress`), checks the CLI under an
+arbitrary UID/GID, tests the container and tmux lifecycle, and publishes both
+tested images as `:latest` using the workflow's `GITHUB_TOKEN`. Failed checks
+prevent publishing, leaving the previously published tags available. Runs are
+serialized to avoid overlapping uploads. `run` checks the default registry
+images for updates; custom and locally built images are left alone.
 
 This automation becomes active after the workflow and its supporting files
 reach the repository's default branch. GitHub schedules can be delayed; these

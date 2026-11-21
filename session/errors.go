@@ -15,6 +15,27 @@ func (e *NotFoundError) Error() string      { return fmt.Sprintf("no session nam
 func (*NotFoundError) Hint() string         { return "hewitt ps -a lists saved sessions" }
 func (*NotFoundError) Is(target error) bool { return target == os.ErrNotExist }
 
+// UntrustedProjectError is a hewitt.yml with sensitive settings that the user
+// has not trusted in its current form. Digest identifies the reviewed contents.
+type UntrustedProjectError struct {
+	Path, Digest string
+	Keys         []string
+	// Changed reports that an earlier version of the file was trusted.
+	Changed bool
+}
+
+func (e *UntrustedProjectError) Error() string {
+	state := "is not trusted"
+	if e.Changed {
+		state = "changed since it was trusted"
+	}
+	return fmt.Sprintf("%s %s and sets %s", e.Path, state, strings.Join(e.Keys, ", "))
+}
+
+func (e *UntrustedProjectError) Hint() string {
+	return "these settings can expose agent logins or host files; review the file, then run hewitt trust (--file " + e.Path + ")"
+}
+
 // errInterrupted marks an agent the user left with Ctrl-C; that is a normal exit.
 var errInterrupted = errors.New("agent interrupted")
 

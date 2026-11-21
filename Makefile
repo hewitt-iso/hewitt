@@ -6,17 +6,20 @@ IMAGE_TAG ?= latest
 IMAGE_BUILD_FLAGS ?=
 
 .DEFAULT_GOAL := build
-.PHONY: build run test vet fmt fmt-check check tidy images image-hewitt image-egress push-images push-hewitt
+.PHONY: build run test vet fmt fmt-check check tidy images image-hewitt image-egress push-images push-hewitt push-egress
 
 images: image-hewitt image-egress
 
 image-hewitt:
 	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target hewitt -t hewitt:local -t $(IMAGE_REGISTRY)/hewitt:$(IMAGE_TAG) images
 
-push-images: push-hewitt
+push-images: push-hewitt push-egress
 
 push-hewitt:
 	$(DOCKER) push $(IMAGE_REGISTRY)/hewitt:$(IMAGE_TAG)
+
+push-egress:
+	$(DOCKER) push $(IMAGE_REGISTRY)/egress:$(IMAGE_TAG)
 
 build:
 	$(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o bin/hewitt .
@@ -43,4 +46,4 @@ tidy:
 	$(GO) mod tidy
 
 image-egress:
-	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target egress -t hewitt/egress:local images
+	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target egress -t hewitt-egress:local -t $(IMAGE_REGISTRY)/egress:$(IMAGE_TAG) images

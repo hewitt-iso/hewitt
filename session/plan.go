@@ -39,6 +39,9 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	if err := checkTrust(opts.DataDir, file); err != nil {
+		return settings{}, err
+	}
 	s := settings{Project: file, repo: repo, danger: map[string]bool{}}
 	for _, value := range []struct {
 		name, value string

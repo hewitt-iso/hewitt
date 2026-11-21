@@ -141,7 +141,9 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 			_, _ = profile.ImportHostConfigs(cfg.DataDir, homeDir, prof)
 		}
 	}
-	id, err := session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
+	id, err := trustAndRetry(cmd, cfg.DataDir, func() (string, error) {
+		return session.RunAgent(cmd.Context(), opts, cmd.ErrOrStderr())
+	})
 	if err != nil {
 		return err
 	}

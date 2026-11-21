@@ -26,8 +26,9 @@ type Egress struct {
 const (
 	egressAlias = "hewitt-egress"
 	egressPort  = "3128"
-	// DefaultEgressImage is built by make image-egress.
-	DefaultEgressImage = "hewitt/egress:local"
+	// DefaultEgressImage is published with the workspace image; make
+	// image-egress builds it locally under the same tag.
+	DefaultEgressImage = "ghcr.io/hewitt-iso/egress:latest"
 )
 
 var egressHost = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
