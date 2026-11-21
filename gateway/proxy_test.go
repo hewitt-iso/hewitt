@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -238,5 +239,45 @@ func TestParseRules(t *testing.T) {
 		if _, err := ParseRules([]string{bad}); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestPendingRequestsArePerLaunch(t *testing.T) {
+	state := t.TempDir()
+	addr := gateway(t, Config{StateDir: state, Wait: 3}, echo(t), nil)
+	runA, runB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	send := func(run, agent string) {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer c.Close()
+		auth := base64.StdEncoding.EncodeToString([]byte(run + ":" + agent))
+		fmt.Fprintf(c, "CONNECT x.example:443 HTTP/1.1\r\nHost: x.example:443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+		_, _ = http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "CONNECT"})
+	}
+	done := make(chan struct{}, 2)
+	go func() { send(runA, "codex"); done <- struct{}{} }()
+	go func() { send(runB, "claude"); done <- struct{}{} }()
+	var list []Request
+	for deadline := time.Now().Add(2 * time.Second); len(list) < 2 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		list, _ = Requests(state)
+	}
+	if len(list) != 2 || list[0].Run == list[1].Run {
+		t.Fatalf("requests = %+v", list)
+	}
+	agents := map[string]string{list[0].Run: list[0].Agent, list[1].Run: list[1].Agent}
+	if agents[runA] != "codex" || agents[runB] != "claude" {
+		t.Fatalf("attribution = %v", agents)
+	}
+	if err := Decide(state, list[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	<-done
+	// The decision covers later connections of any launch.
+	if code, _ := connect(t, addr, "x.example:443"); code != 200 {
+		t.Fatalf("decided target = %d", code)
 	}
 }

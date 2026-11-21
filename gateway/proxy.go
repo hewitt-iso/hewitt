@@ -163,8 +163,9 @@ func (s *Server) permit(r Request, host, port string) (bool, string) {
 	return false, "pending approval " + id + " (hewitt approve " + id + ")"
 }
 
-// request returns the latest request for the same target with its decision,
-// or records r as a new pending one.
+// request returns the latest decided request for the same target, or a
+// pending one of the same launch, or records r as a new pending one. Each
+// launch has its own pending request, so each agent's pane can ask.
 func (s *Server) request(r Request) (string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,7 +174,7 @@ func (s *Server) request(r Request) (string, string, error) {
 		return "", "", err
 	}
 	for _, old := range slices.Backward(list) {
-		if old.Kind == r.Kind && old.Target == r.Target {
+		if old.Kind == r.Kind && old.Target == r.Target && (old.Decision != "" || old.Run == r.Run) {
 			return old.ID, old.Decision, nil
 		}
 	}

@@ -212,7 +212,11 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 		}
 		env, files = append(env, token...), tokenFiles
 	}
+	// Requests of this launch appear where its agent waits for them.
+	watch, stopWatch := context.WithCancel(ctx)
+	go watchRequests(watch, store, m, run, stderr)
 	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
+	stopWatch()
 	var exit *exec.ExitError
 	if ctx.Err() == nil && errors.As(err, &exit) {
 		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}

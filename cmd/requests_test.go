@@ -135,4 +135,41 @@ printf '41 42\n'
 	if out, _ := executeCommand(t, "requests", "-a", "--config", configPath); !strings.Contains(out, "allow") || !strings.Contains(out, "deny") {
 		t.Fatalf("requests -a = %q", out)
 	}
+
+	// The popup prompt asks about the launch's own requests and the status
+	// line shows how many are pending.
+	other := strings.Repeat("cd", 32)
+	write("0123456789af", "file", "/hewitt/profiles/codex/codex/auth.json", run, "opencode", now.Add(3*time.Second))
+	write("0123456789b0", "network", "unrelated.example:443", other, "pi", now.Add(4*time.Second))
+	if out, err := executeCommand(t, "status", "--tmux", "--config", configPath); err != nil || out != "#[fg=colour231,bg=colour160,bold] SRNA 2 #[default]\n" {
+		t.Fatalf("status --tmux = %q, %v", out, err)
+	}
+	prompt := NewRootCommand("test")
+	var screen strings.Builder
+	prompt.SetIn(strings.NewReader("d\n"))
+	prompt.SetOut(&screen)
+	prompt.SetErr(&screen)
+	prompt.SetArgs([]string{"srna-prompt", "--data-dir", data, "--session", containerID, "--run", run})
+	if err := prompt.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"opencode", "wants file", "/hewitt/profiles/codex/codex/auth.json", "another agent's login and settings (codex)", "[a]", "abort opencode"} {
+		if !strings.Contains(screen.String(), want) {
+			t.Errorf("prompt screen missing %q: %q", want, screen.String())
+		}
+	}
+	if strings.Contains(screen.String(), "unrelated.example") {
+		t.Errorf("prompt showed another launch's request: %q", screen.String())
+	}
+	decided = map[string]string{}
+	list, _ = gateway.Requests(m.Egress.StateDir())
+	for _, r := range list {
+		decided[r.Target] = r.Decision
+	}
+	if decided["/hewitt/profiles/codex/codex/auth.json"] != "deny" || decided["unrelated.example:443"] != "" {
+		t.Fatalf("prompt decisions = %v", decided)
+	}
+	if out, err := executeCommand(t, "status", "--config", configPath); err != nil || !strings.Contains(out, "srna: 1 suspicious request(s) need approval") {
+		t.Fatalf("status = %q, %v", out, err)
+	}
 }
