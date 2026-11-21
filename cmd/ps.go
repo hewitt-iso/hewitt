@@ -37,6 +37,16 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 			for _, run := range runs {
 				connected[run.WorkspaceID] = append(connected[run.WorkspaceID], run.Agent)
 			}
+			requests, err := store.Requests()
+			if err != nil {
+				return err
+			}
+			pending := map[string]int{}
+			for _, r := range requests {
+				if r.Decision == "" {
+					pending[r.SessionID]++
+				}
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "ID\tAGENT\tIMAGE\tNAME\tSTATUS\tCREATED"); err != nil {
 				return fmt.Errorf("write session list: %w", err)
@@ -56,6 +66,10 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 						status = "idle"
 					}
 				}
+				if n := pending[m.ID]; n > 0 {
+					// Suspicious requests need approval before the agent proceeds.
+					status = fmt.Sprintf("SRNA (%d)", n)
+				}
 				id := shortID(m.ID)
 				if noTrunc {
 					id = m.ID
@@ -70,6 +84,10 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 			}
 			if err := w.Flush(); err != nil {
 				return fmt.Errorf("write session list: %w", err)
+			}
+			if len(pending) > 0 {
+				_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Suspicious requests need approval (SRNA): hewitt requests, then hewitt approve, deny, or abort <numbers>")
+				return err
 			}
 			return nil
 		},

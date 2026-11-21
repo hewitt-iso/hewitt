@@ -29,7 +29,7 @@ RUN curl -fsSL https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.g
     && ./configure --prefix=/usr/local \
     && make -j2 \
     && make install
-COPY test-terminal-colors.py /tmp/test-terminal-colors.py
+COPY images/test-terminal-colors.py /tmp/test-terminal-colors.py
 RUN python3 /tmp/test-terminal-colors.py
 
 FROM base AS hewitt
@@ -45,15 +45,26 @@ ENV PATH=/usr/local/go/bin:/hewitt/tools/bin:/usr/local/sbin:/usr/local/bin:/usr
 RUN printf 'export PATH="/usr/local/go/bin:/hewitt/tools/bin:$PATH"\n' > /etc/profile.d/hewitt-tools.sh
 RUN test "$(tmux -V)" = "tmux 3.8"
 LABEL org.opencontainers.image.description="Hewitt unified workspace environment for coding agents"
-COPY --chmod=0755 hewitt-agent /usr/local/bin/hewitt-agent
+COPY --chmod=0755 images/hewitt-agent /usr/local/bin/hewitt-agent
 ENV DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1
 USER 1000:1000
 CMD ["hewitt-agent"]
 
-# Egress proxy for restricted sessions. Hewitt mounts its configuration and
-# host allowlist; the proxy runs as the invoking user on an unprivileged port.
-FROM base AS egress
-RUN apt-get update && apt-get install -y --no-install-recommends tinyproxy \
+# The session gateway is the hewitt binary itself, built from this source.
+FROM go-toolchain AS gateway-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /hewitt .
+
+# Gateway for sessions: host policy, approval of unlisted hosts, and credential
+# injection. Hewitt mounts its configuration, state, and CA; it runs as the
+# invoking user on an unprivileged port.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS egress
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=gateway-build /hewitt /usr/local/bin/hewitt
 USER 1000:1000
-CMD ["tinyproxy", "-d", "-c", "/hewitt/egress/tinyproxy.conf"]
+ENTRYPOINT ["hewitt", "gateway"]
+CMD ["/hewitt/gateway/config.json"]

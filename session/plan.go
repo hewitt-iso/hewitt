@@ -39,6 +39,9 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	if err := checkTrust(opts.DataDir, file); err != nil {
+		return settings{}, err
+	}
 	s := settings{Project: file, repo: repo, danger: map[string]bool{}}
 	for _, value := range []struct {
 		name, value string
@@ -254,8 +257,15 @@ func (s settings) apply(create *docker.CreateOptions) {
 	create.Runtime, create.Memory, create.CPUs, create.PIDs = s.Runtime, s.Memory, s.CPUs, s.PIDs
 }
 
-// egress reports whether the session uses a Hewitt-owned egress proxy: the
-// default network of restricted and hardened sessions in new mode.
+// gateway reports whether the session uses a Hewitt-owned gateway: the
+// default network of every session in new mode. It holds the credentials
+// agents receive placeholders for.
+func (s settings) gateway() bool {
+	return s.Mode == "new" && s.Network == ""
+}
+
+// egress reports whether the gateway restricts hosts: the default network of
+// restricted and hardened sessions in new mode.
 func (s settings) egress() bool {
 	return s.Mode == "new" && s.Network == "" && slices.Index(config.Isolations, s.Isolation) >= 2
 }

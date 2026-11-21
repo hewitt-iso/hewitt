@@ -15,6 +15,47 @@ func (e *NotFoundError) Error() string      { return fmt.Sprintf("no session nam
 func (*NotFoundError) Hint() string         { return "hewitt ps -a lists saved sessions" }
 func (*NotFoundError) Is(target error) bool { return target == os.ErrNotExist }
 
+// RequestNotFoundError means no session's gateway recorded a request with ID.
+type RequestNotFoundError struct{ ID string }
+
+func (e *RequestNotFoundError) Error() string { return fmt.Sprintf("no request with ID %q", e.ID) }
+func (*RequestNotFoundError) Hint() string {
+	return "hewitt requests -a lists requests of all sessions"
+}
+
+// UnattributedRequestError is a request that carried no agent connection, so
+// abort could deny it but stop no agent.
+type UnattributedRequestError struct{ Number int }
+
+func (e *UnattributedRequestError) Error() string {
+	return fmt.Sprintf("request #%d was denied, but it names no agent connection to stop", e.Number)
+}
+
+func (*UnattributedRequestError) Hint() string {
+	return "a process outside Hewitt's agent launches made it; hewitt stop <session> stops the whole workspace"
+}
+
+// UntrustedProjectError is a hewitt.yml with sensitive settings that the user
+// has not trusted in its current form. Digest identifies the reviewed contents.
+type UntrustedProjectError struct {
+	Path, Digest string
+	Keys         []string
+	// Changed reports that an earlier version of the file was trusted.
+	Changed bool
+}
+
+func (e *UntrustedProjectError) Error() string {
+	state := "is not trusted"
+	if e.Changed {
+		state = "changed since it was trusted"
+	}
+	return fmt.Sprintf("%s %s and sets %s", e.Path, state, strings.Join(e.Keys, ", "))
+}
+
+func (e *UntrustedProjectError) Hint() string {
+	return "these settings can expose agent logins or host files; review the file, then run hewitt trust (--file " + e.Path + ")"
+}
+
 // errInterrupted marks an agent the user left with Ctrl-C; that is a normal exit.
 var errInterrupted = errors.New("agent interrupted")
 

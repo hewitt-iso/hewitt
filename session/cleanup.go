@@ -30,8 +30,10 @@ func Stop(ctx context.Context, store *Store, id string) (string, error) {
 		return "", err
 	}
 	if m.Egress != nil {
-		if err := client.Stop(ctx, m.Egress.Proxy); err != nil {
-			return "", err
+		for _, helper := range m.Egress.helpers() {
+			if err := client.Stop(ctx, helper); err != nil {
+				return "", err
+			}
 		}
 	}
 	return m.ID, nil
@@ -65,7 +67,7 @@ func Remove(ctx context.Context, store *Store, id string, force bool) (string, e
 	}
 	containers := []string{m.ID}
 	if m.Egress != nil {
-		containers = append(containers, m.Egress.Proxy)
+		containers = append(containers, m.Egress.helpers()...)
 	}
 	for _, container := range containers {
 		running, err := client.Running(ctx, container)
@@ -119,7 +121,7 @@ func removeContainers(ctx context.Context, m Metadata) error {
 	client := docker.Client{}
 	containers := []string{m.ID}
 	if m.Egress != nil {
-		containers = append(containers, m.Egress.Proxy)
+		containers = append(containers, m.Egress.helpers()...)
 	}
 	for _, container := range containers {
 		if err := client.Remove(ctx, container); err != nil {
@@ -149,8 +151,10 @@ func replaceContainers(ctx context.Context, m Metadata, stderr io.Writer) error 
 		return err
 	}
 	if m.Egress != nil {
-		if err := client.Stop(ctx, m.Egress.Proxy); err != nil && !docker.IsNotFound(err) {
-			return err
+		for _, helper := range m.Egress.helpers() {
+			if err := client.Stop(ctx, helper); err != nil && !docker.IsNotFound(err) {
+				return err
+			}
 		}
 	}
 	return removeContainers(ctx, m)

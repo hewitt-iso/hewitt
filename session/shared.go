@@ -133,6 +133,9 @@ func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) 
 				return "", nil, err
 			}
 		}
+		if err := startObserver(ctx, m.Egress, stderr); err != nil {
+			return "", nil, err
+		}
 		if _, err := fmt.Fprintf(stderr, "Reusing workspace %s (%s)\n", m.Name, m.ID[:12]); err != nil {
 			return "", nil, err
 		}
@@ -178,6 +181,12 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if choice != "workspace" {
 		command = append(command, choice)
 	}
+	if choice != "workspace" && choice != "shell" {
+		// The workspace mounts the tool cache read-only; install before exec.
+		if err := ensureTool(ctx, opts.DataDir, m.Image, choice, stderr); err != nil {
+			return err
+		}
+	}
 	run, release, err := store.RecordRun(m, choice)
 	if err != nil {
 		return fmt.Errorf("track agent connection: %w", err)
@@ -194,7 +203,16 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if err := reportStep(stderr, "Opening "+choice+" in workspace"); err != nil {
 		return err
 	}
-	err = (docker.Client{}).ExecInteractive(ctx, m.ID, command, in, out, stderr)
+	env, files := runEnv(m.Egress, run.ID, choice), []string(nil)
+	if choice == "claude" {
+		// Chosen per launch, so a login after the workspace was created applies.
+		token, tokenFiles, err := agentToken(opts.DataDir, m.Profile, "claude", m.Egress != nil)
+		if err != nil {
+			return err
+		}
+		env, files = append(env, token...), tokenFiles
+	}
+	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	var exit *exec.ExitError
 	if ctx.Err() == nil && errors.As(err, &exit) {
 		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}

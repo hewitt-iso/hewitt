@@ -303,7 +303,8 @@ func (m Metadata) validate() error {
 			return err
 		}
 	}
-	if e := m.Egress; e != nil && (!strings.HasPrefix(e.Network, "hewitt-egress-") || validateID(e.Proxy) != nil || !filepath.IsAbs(e.ConfigDir)) {
+	if e := m.Egress; e != nil && (!strings.HasPrefix(e.Network, "hewitt-egress-") || validateID(e.Proxy) != nil || !filepath.IsAbs(e.ConfigDir) ||
+		e.Observer != "" && validateID(e.Observer) != nil) {
 		return fmt.Errorf("invalid session egress record")
 	}
 	if m.Mode != "" && !slices.Contains(config.Modes, m.Mode) {

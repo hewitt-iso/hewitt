@@ -62,11 +62,11 @@ esac
 	// 2. Complete onboarding via bare `hewitt`:
 	// Step 1: Enter (1 = Yes, import configs)
 	// Step 2: Enter (1 = Yes, Git worktree)
-	// Step 3: Enter (1 = Yes, copy host credentials)
+	// Step 3: 2 (copy host credentials; login is the default)
 	stdout.Reset()
 	stderr.Reset()
 	root = NewRootCommand("test")
-	root.SetIn(fakeTTYReader{strings.NewReader("\n\n\n\n")})
+	root.SetIn(fakeTTYReader{strings.NewReader("\n\n2\n\n")})
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	if err := root.Execute(); err != nil {

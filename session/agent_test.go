@@ -213,7 +213,15 @@ func TestReloginReplacesClaudeToken(t *testing.T) {
 	if err := Authenticate(context.Background(), opts, "relogin", in, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	path, err := profile.TokenFile(dir)
+	// The token saved in the profile by earlier versions moved out of it.
+	if path, err := profile.TokenFile(dir); err != nil || path != "" {
+		t.Fatalf("token left in profile: %q, %v", path, err)
+	}
+	secrets, err := profile.PrepareSecrets(data, "claude", "personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := profile.TokenFile(secrets)
 	if err != nil || path == "" {
 		t.Fatalf("token file %q, %v", path, err)
 	}

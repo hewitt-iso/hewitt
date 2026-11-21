@@ -46,6 +46,19 @@ press Q or Ctrl-C to cancel before workspace setup starts. Open `hewitt` in
 another host tmux window to choose another agent in the same workspace container.
 First-time users complete the optional 3-step onboarding flow first.
 
+Onboarding can import host settings (Claude, Codex, and OpenCode rules,
+skills, MCP servers, and settings; tmux; git and bash defaults) into the agent
+profiles, and `run` refreshes them before each start. Agents can read and send
+anything in their profiles, so secret values are removed from the copies by
+default: MCP `env` and `headers`, provider `apiKey` entries, `bearer_token`,
+secret-looking shell exports and git settings, URL credentials, secret command
+flags, and well-known token formats. References such as `${GITHUB_TOKEN}` stay.
+Onboarding lists what it removed and asks whether to keep the values instead.
+Files that usually are credentials (`.env*` other than examples, `*.pem`,
+`*.key`, `credentials`, `auth.json`, SSH private keys) are never copied from
+imported directories. Copying host logins into profiles is a separate,
+explicit choice; a `hewitt login` in the container is recommended instead.
+
 After selection, progress messages show configuration sync, workspace lookup or
 creation, profile and tool cache preparation, repository initialization, and
 container startup. Existing workspaces report reuse or restart. The container
@@ -89,14 +102,29 @@ public for users to pull them without a registry login.
 To build locally instead (requires Docker and network access):
 
 ```sh
-make images  # builds hewitt:local and hewitt/egress:local
+make images  # builds hewitt:local and hewitt-egress:local
 # Or build only the workspace image:
 make image-hewitt
 ```
 
 Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand
-into `<data_dir>/tools` (mounted at `/hewitt/tools`). Start each agent in its own
-host terminal tab or tmux window:
+into the shared tool cache `<data_dir>/tools`. Agent and login containers mount
+it read-only at `/hewitt/tools`, so a session cannot replace executables that
+later sessions of any project run. Before launching an agent that is missing
+from the cache, `run`, `login`, and `auth` install it in a short-lived installer
+container that mounts only the tool cache: no project, profiles, env file, or
+credentials. It uses Docker's default network, also for restricted and hardened
+sessions, and is removed when it exits. Installations are serialized by a lock
+held only while one runs; agents already in the cache start in parallel without
+it. The installer moves each executable into place last, so running agents keep
+their binary and later runs use the new one. The workspace container keeps
+running during installation. An agent chosen inside a container, such as from
+a legacy tmux window's picker, must already be in the cache; otherwise
+`hewitt-agent` names the `hewitt run <agent>` command that installs it. Images
+without `hewitt-agent install` cannot install agents; the default image is
+refreshed automatically.
+
+Start each agent in its own host terminal tab or tmux window:
 
 ```sh
 hewitt                    # select Codex in host window 1
@@ -242,7 +270,7 @@ ssh requires.
 - macOS (Docker Desktop): Docker Desktop's forwarded socket
   `/run/host-services/ssh-auth.sock` is used. It is root-owned in some Docker
   Desktop versions, so a non-root session may get "permission denied".
-- Restricted and hardened sessions refuse `--ssh`: their egress proxy carries
+- Restricted and hardened sessions refuse `--ssh`: their gateway carries
   only tunnels to allowed hosts.
 
 ### Worktree workspace (legacy)
@@ -260,8 +288,9 @@ adapters are `claude`, `codex`, `opencode`, `pi`, and `antigravity`. Other agent
 defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
-are required. Native credentials remain in the private profile directory; do not
-commit it. Login output is not recorded by Docker.
+are required. Native credentials remain in the private profile directory, and
+Claude's long-lived token in `<data_dir>/secrets`, which only the gateway reads
+(see Gateway, credentials, and approvals); do not commit either. Login output is not recorded by Docker.
 
 Sessions may share a profile. Codex refreshes its own tokens in the shared
 `auth.json` and reloads it when another session has already refreshed; if two
@@ -361,7 +390,7 @@ mounts:
 rules: .hewitt/claude            # default: .hewitt/<agent> if present
 isolation: restricted            # shared | isolated (default) | restricted | hardened
 rootfs: ro                       # ro | rw
-network: agents-net              # restricted/hardened default: Hewitt egress proxy
+network: agents-net              # default: a per-session network with the Hewitt gateway
 runtime: runsc                   # required for hardened
 limits:                          # applied only when set
   memory: 4g
@@ -370,24 +399,115 @@ limits:                          # applied only when set
 env_file: .env.agent             # API keys as KEY=VALUE; default .env.agent if present
 egress:
   allow: [pypi.org, "*.pythonhosted.org", "otel.example.com:4318"]  # host (port 443) or host:port
-  image: hewitt/egress:local
+  image: ghcr.io/hewitt-iso/egress:latest
 danger: [host-paths]             # network | host-paths | writable-root | symlinks
 telemetry:
   endpoint: https://otel.example.com:4318  # OTLP/HTTP collector; see OpenTelemetry
 ```
+
+A `hewitt.yml` arrives with the repository, so settings that could expose agent
+logins or host files apply only after you trust the file: `image`, `mode: exec`
+or `sidecar`, `ssh`, `isolation: shared`, `network`, `runtime`, `egress.allow`,
+`egress.image`, `danger`, `telemetry.endpoint`, and `mounts`, `rules`,
+`env_file`, or `workspace.paths` outside the file's directory. In a terminal,
+`run` shows such a file and asks; otherwise it fails until you run
+`hewitt trust` (or `hewitt trust --file PATH`). Trust covers the file's current
+contents; after any change, `run` asks again. Files without these settings,
+such as one that selects the agent, base branch, and limits, need no trust.
+Command-line flags are your own input and need none either.
 
 Weakening an isolation level (read-write host paths, a writable root, a
 non-proxy network, symlinked mount sources) is refused unless the matching
 `danger` item (or `--danger`) is given. `exec` mode accepts only `agent`,
 `mode`, `target`, `workdir`, `isolation: shared`, and `danger`.
 
-The egress proxy of restricted and hardened sessions passes only `CONNECT`
-tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
-unless an entry names another port (`host:port`). A port opens for that host
-only, and `run` warns about each such entry because its traffic need not be
-HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
-HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
-for an `http://` endpoint.
+### Gateway, credentials, and approvals
+
+Every session in `new` mode on the default network gets a Hewitt gateway: a
+separate container (`ghcr.io/hewitt-iso/egress`) on a per-session network that
+agents reach as their HTTPS proxy. Agents cannot read its configuration,
+state, or credentials.
+
+- **Credential injection.** `hewitt login claude` saves the long-lived token in
+  `<data_dir>/secrets/claude/<profile>/`, which only the gateway mounts. Claude
+  receives the placeholder `sk-ant-oat01-hewitt-gateway-managed`; the gateway
+  terminates TLS for `api.anthropic.com` only, with a certificate from a CA in
+  `<data_dir>/gateway-ca` that agent containers trust through
+  `NODE_EXTRA_CA_CERTS`, and replaces the placeholder with the token. Other
+  hosts are tunneled unread. A token saved in a profile by an earlier version
+  moves to `secrets/` on the next run. A new login applies without restarting
+  the gateway. Sessions on a custom `network` have no gateway and receive the
+  token itself, as before. Codex, OpenCode, Pi, and Antigravity keep their
+  logins in their profiles.
+- **Open and restricted gateways.** `shared` and `isolated` sessions pass every
+  HTTPS host; their network reaches the outside, so plain HTTP goes direct.
+  `restricted` and `hardened` sessions have an internal network and pass only
+  tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
+  unless an entry names another port (`host:port`). A port opens for that host
+  only, and `run` warns about each such entry because its traffic need not be
+  HTTPS. Plain HTTP requests through a restricted gateway are refused, so
+  clients must use HTTPS or tunnel through the proxy, as Claude Code's
+  OpenTelemetry exporter does for an `http://` endpoint.
+- **Suspicious requests need approval (SRNA).** A restricted gateway holds a
+  connection to any other host for about a minute instead of refusing it.
+  The file observer (below) holds file access the same way. See
+  [Approving suspicious requests](#approving-suspicious-requests).
+
+### File observer
+
+Agents of one workspace share its container and UID, so mounts cannot keep
+them out of each other's profiles. In `isolated`, `restricted`, and
+`hardened` workspaces, a Hewitt observer container holds such access instead:
+
+- An agent opening another agent's profile (for example Codex reading
+  `/hewitt/profiles/claude`, where Claude's login lives) waits for approval.
+  An agent's own profile, and everything the `hewitt shell` user opens, pass.
+- Opening or creating a credential file in the workspace (`.env*` other than
+  examples, `*.pem`, `*.key`, `credentials`, `auth.json`, SSH keys) waits for
+  approval.
+- Processes are attributed to the agent launch they descend from: each launch
+  gets `HEWITT_RUN` and `HEWITT_AGENT`, and the topmost process of a launch
+  decides, so a child cannot claim another agent's identity. A process outside
+  every launch is unattributed (`-`), and its access to any profile waits.
+- The observer starts as root in the host PID namespace with `CAP_SYS_ADMIN`,
+  `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH`, `CAP_SETUID`, and `CAP_SETGID`, only
+  to find the workspace container and attach fanotify permission marks to its
+  profile and workspace mounts. It then switches to your UID with no
+  capabilities, has no network, and exits when the workspace stops; agent
+  containers keep their dropped capabilities. It needs a kernel with fanotify
+  permission events; if it cannot attach, `run` warns and the session continues
+  without it. `docker logs` of the observer shows every decision.
+
+### Approving suspicious requests
+
+`hewitt ps` shows sessions with pending requests as `SRNA (n)`. `hewitt
+requests` lists them with a number, the session, the agent that made the
+request, and its target; `-a` includes decided ones. A number is assigned the
+first time a request is listed and never changes, so numbers you read stay
+valid when new requests arrive.
+
+```sh
+hewitt requests
+hewitt approve 1-3 7      # allow; later requests for the same target pass
+hewitt deny 6-9           # refuse; later requests for the same target fail
+hewitt abort 4 5          # refuse and kill the agent launches that asked
+hewitt approve {10..12}   # shell brace expansion also works
+```
+
+Every selected number must exist, or nothing is decided. A waiting request
+proceeds or fails at once; one that waited about a minute without a decision
+is refused, and an agent that retries follows the decision made meanwhile.
+Network decisions apply to the session's later connections to the same host
+and port; file decisions apply to the same file for the same agent. `abort`
+kills every process of the launch in the workspace container, including
+background children; a request without an agent launch is denied but stops
+nothing. Restricted sessions name the agent of network requests through
+per-launch proxy credentials (`http://<run>:<agent>@hewitt-egress:3128`).
+
+An allowlist does not stop deliberate exfiltration through an allowed host:
+an agent that can reach `github.com` can push data to any repository there.
+The gateway keeps credentials out of agents and makes unexpected destinations
+visible; it is not a data-loss filter.
 
 ## OpenTelemetry
 
@@ -400,7 +520,7 @@ telemetry:
   endpoint: https://otel.example.com:4318   # scheme://host[:port]; no path or credentials
 ```
 
-| Agent | Exports | Configured by Hewitt as | Through the egress proxy |
+| Agent | Exports | Configured by Hewitt as | Through a restricted gateway |
 |---|---|---|---|
 | Claude Code | logs, metrics | `CLAUDE_CODE_ENABLE_TELEMETRY` and `OTEL_*` variables | `http://` and `https://` |
 | Codex | logs, traces | `-c otel.exporter` and `otel.trace_exporter` overrides | `https://` only |
@@ -419,14 +539,15 @@ before login; Claude Code records prompt text only with `OTEL_LOG_USER_PROMPTS=1
 
 The endpoint must be reachable from the container:
 
-- `shared` and `isolated` sessions use Docker's default bridge network.
-  `localhost` is the container itself. Docker Desktop resolves
+- `shared` and `isolated` sessions use their gateway's network, which reaches
+  the outside directly; HTTPS goes through the gateway, which resolves names
+  from Docker's default network. `localhost` is the container itself. Docker Desktop resolves
   `host.docker.internal` to the host; Linux does not, and a host firewall such
   as ufw usually drops traffic from `docker0`. Prefer a collector reachable by
   DNS name, or allow the bridge in the host firewall and listen on the bridge
   address (usually `172.17.0.1`), not `127.0.0.1`.
 - `restricted` and `hardened` sessions reach the collector only through the
-  egress proxy, and `run` adds the endpoint's host and port to its allowlist.
+  gateway, and `run` adds the endpoint's host and port to its allowlist.
   The proxy refuses plain HTTP, and Codex and OpenCode send plain HTTP to an
   `http://` endpoint, so use `https://`; `run` warns otherwise, and warns that a
   port other than 443 is not limited to HTTPS. OpenCode's trace exporter
@@ -456,17 +577,19 @@ password. Never put tokens in configuration, Dockerfiles, or source control.
 
 The **Publish agent images** GitHub Actions workflow runs every six hours
 (at 00:17, 06:17, 12:17, and 18:17 UTC) and can also be started manually.
-Scheduled runs install Codex's npm `latest` version and Claude Code's `latest`
-release channel. Manual runs can select exact versions or Claude's `stable`
-channel. Builds pull the pinned base image and disable Docker's build cache so
-upstream client and OS package updates are actually downloaded.
+Agents are not part of the images: they are installed into the tool cache on
+first use (see above) and are not updated by image releases. Scheduled builds
+pull the pinned base images and disable Docker's build cache, so they pick up
+Debian package updates.
 
-Each run rebuilds both images, checks the CLI under an arbitrary UID/GID,
-tests the container and tmux lifecycle, and publishes the tested image as
-`:latest` using the workflow's `GITHUB_TOKEN`. Failed checks prevent publishing
-that image, leaving the previously published tag available. Runs are serialized
-to avoid overlapping uploads. Images are rebuilt even if client versions have
-not changed, also refreshing base-image packages.
+Each run rebuilds the workspace image (`ghcr.io/hewitt-iso/hewitt`) and the
+gateway image (`ghcr.io/hewitt-iso/egress`, the `hewitt` binary built from
+this source), checks the CLI under an
+arbitrary UID/GID, tests the container and tmux lifecycle, and publishes both
+tested images as `:latest` using the workflow's `GITHUB_TOKEN`. Failed checks
+prevent publishing, leaving the previously published tags available. Runs are
+serialized to avoid overlapping uploads. `run` checks the default registry
+images for updates; custom and locally built images are left alone.
 
 This automation becomes active after the workflow and its supporting files
 reach the repository's default branch. GitHub schedules can be delayed; these

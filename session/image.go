@@ -9,12 +9,12 @@ import (
 	"github.com/hewitt-iso/hewitt/docker"
 )
 
-// refreshImage keeps the default registry image current; Docker's create
+// refreshImage keeps the default registry images current; Docker's create
 // --pull missing never replaces a stale local tag. Locally built images (no
 // registry digest) and custom images are left alone, and a failed check falls
 // back to the local copy so offline runs still work.
 func refreshImage(ctx context.Context, image string, stderr io.Writer) error {
-	if image != agent.DefaultImage {
+	if image != agent.DefaultImage && image != DefaultEgressImage {
 		return nil
 	}
 	client := docker.Client{}

@@ -74,7 +74,9 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(raw), "container create ") != 1 {
+	// One workspace container, its gateway, and its observer; the second agent reuses them.
+	if strings.Count(string(raw), "container create ") != 3 || strings.Count(string(raw), " gateway /hewitt/gateway/config.json") != 1 ||
+		strings.Count(string(raw), " observe /hewitt/observer/config.json") != 1 {
 		t.Fatalf("created another container: %s", raw)
 	}
 	for _, name := range agent.Names[:2] {

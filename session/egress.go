@@ -3,73 +3,151 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/hewitt-iso/hewitt/docker"
+	"github.com/hewitt-iso/hewitt/gateway"
+	"github.com/hewitt-iso/hewitt/profile"
 )
 
-// Egress records the Hewitt-owned proxy and internal network of one restricted
+// Egress records the Hewitt-owned gateway container and network of one
 // session. Like session containers, they are preserved for explicit cleanup.
+// The JSON names predate the gateway, which replaced the egress proxy.
 type Egress struct {
 	Network   string   `json:"network"`
 	Proxy     string   `json:"proxy"`
 	ConfigDir string   `json:"config_dir"`
 	Hosts     []string `json:"hosts"`
+	// Open gateways pass every host; others hold unlisted hosts for approval.
+	Open bool `json:"open,omitempty"`
+	// Observer is the container that holds agents' access to other agents'
+	// logins and to credential files, when the session has one.
+	Observer string `json:"observer,omitempty"`
 }
+
+// helpers lists the session's Hewitt-owned helper containers.
+func (e Egress) helpers() []string {
+	if e.Observer != "" {
+		return []string{e.Proxy, e.Observer}
+	}
+	return []string{e.Proxy}
+}
+
+// StateDir holds the session's requests for approval and their decisions.
+func (e Egress) StateDir() string { return filepath.Join(e.ConfigDir, "state") }
 
 const (
 	egressAlias = "hewitt-egress"
 	egressPort  = "3128"
-	// DefaultEgressImage is built by make image-egress.
-	DefaultEgressImage = "hewitt/egress:local"
+	// DefaultEgressImage is the gateway image, published with the workspace
+	// image; make image-egress builds it locally under the same tag.
+	DefaultEgressImage = "ghcr.io/hewitt-iso/egress:latest"
+	// claudePlaceholder is the token agents hold; the gateway replaces it with
+	// the saved token in requests to Anthropic.
+	claudePlaceholder = "sk-ant-oat01-hewitt-gateway-managed"
+	// gatewayCA is where agent containers find the certificate that signs the
+	// gateway's certificates for injected hosts.
+	gatewayCA = "/hewitt/gateway-ca.crt"
 )
 
-var egressHost = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+// claudeHosts are the Anthropic API hosts whose requests carry the token.
+var claudeHosts = []string{"api.anthropic.com"}
 
-// proxyEnv points clients at the egress proxy; both spellings are common.
-func proxyEnv() []string {
+// proxyEnv points clients at the gateway; both spellings are common. Claude
+// Code trusts the gateway's CA through NODE_EXTRA_CA_CERTS. An open gateway
+// serves only HTTPS: its network reaches the outside, so plain HTTP, which
+// the gateway refuses, goes direct.
+func proxyEnv(open bool) []string {
 	proxy := "http://" + egressAlias + ":" + egressPort
-	return []string{"HTTPS_PROXY=" + proxy, "HTTP_PROXY=" + proxy, "https_proxy=" + proxy, "http_proxy=" + proxy,
-		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1"}
+	env := []string{"HTTPS_PROXY=" + proxy, "https_proxy=" + proxy,
+		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1", "NODE_EXTRA_CA_CERTS=" + gatewayCA}
+	if !open {
+		env = append(env, "HTTP_PROXY="+proxy, "http_proxy="+proxy)
+	}
+	return env
 }
 
-// createEgress creates an internal network and a stopped proxy container that
-// reaches the outside through Docker's default network and permits only
-// tunnels to the allowed hosts. Nothing is started; on failure, created
-// resources are reported.
-func createEgress(ctx context.Context, dataDir, image string, hosts []string) (Egress, error) {
-	allow, conf, err := egressConfig(hosts)
+// runEnv identifies one agent connection to Hewitt's gateway and observer:
+// HEWITT_RUN and HEWITT_AGENT mark its processes, and the proxy credentials
+// mark its connections, so requests that need approval name the agent and
+// abort can stop it. Requests without these are attributed to no connection.
+func runEnv(e *Egress, run, agent string) []string {
+	env := []string{"HEWITT_RUN=" + run, "HEWITT_AGENT=" + agent}
+	if e == nil {
+		return env
+	}
+	proxy := "http://" + run + ":" + agent + "@" + egressAlias + ":" + egressPort
+	env = append(env, "HTTPS_PROXY="+proxy, "https_proxy="+proxy)
+	if !e.Open {
+		env = append(env, "HTTP_PROXY="+proxy, "http_proxy="+proxy)
+	}
+	return env
+}
+
+// caDir is the user's gateway CA, shared by all sessions. Only gateway
+// containers mount it; agents mount only its certificate.
+func caDir(dataDir string) string { return filepath.Join(dataDir, "gateway-ca") }
+
+// createGateway creates a network and a stopped gateway container that
+// reaches the outside through Docker's default network. A restricted gateway
+// (open false) has an internal network and passes only tunnels to hosts;
+// other hosts wait for approval. Every gateway replaces the Claude
+// placeholder with the token saved for profileID. Nothing is started; on
+// failure, created resources are reported.
+func createGateway(ctx context.Context, dataDir, image, profileID string, open bool, hosts []string) (Egress, error) {
+	if !open {
+		if _, err := gateway.ParseRules(hosts); err != nil {
+			return Egress{}, err
+		}
+	}
+	secrets, err := profile.PrepareSecrets(dataDir, "claude", profileID)
 	if err != nil {
 		return Egress{}, err
 	}
-	token := strings.ToLower(rand.Text())
-	e := Egress{Network: "hewitt-egress-" + token, ConfigDir: filepath.Join(dataDir, "egress", token), Hosts: hosts}
-	if err := os.MkdirAll(e.ConfigDir, 0o700); err != nil {
-		return e, fmt.Errorf("create egress configuration: %w", err)
+	if err := gateway.EnsureCA(caDir(dataDir)); err != nil {
+		return Egress{}, err
 	}
-	for name, content := range map[string]string{"allow": allow, "tinyproxy.conf": conf} {
-		if err := os.WriteFile(filepath.Join(e.ConfigDir, name), []byte(content), 0o600); err != nil {
-			return e, fmt.Errorf("write egress configuration: %w", err)
-		}
+	token := strings.ToLower(rand.Text())
+	e := Egress{Network: "hewitt-egress-" + token, ConfigDir: filepath.Join(dataDir, "egress", token), Hosts: hosts, Open: open}
+	if err := os.MkdirAll(e.StateDir(), 0o700); err != nil {
+		return e, fmt.Errorf("create gateway configuration: %w", err)
+	}
+	cfg := gateway.Config{
+		Listen: "0.0.0.0:" + egressPort, Open: open, CADir: "/hewitt/ca", StateDir: "/hewitt/state",
+		Inject: []gateway.Injection{{Hosts: claudeHosts, Placeholder: claudePlaceholder,
+			TokenFile: "/hewitt/secrets/claude/token.env", Variable: "CLAUDE_CODE_OAUTH_TOKEN"}},
+	}
+	if !open {
+		cfg.Allow = hosts
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return e, fmt.Errorf("encode gateway configuration: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(e.ConfigDir, "config.json"), data, 0o600); err != nil {
+		return e, fmt.Errorf("write gateway configuration: %w", err)
 	}
 	client := docker.Client{}
-	if _, err := client.CreateNetwork(ctx, e.Network, true); err != nil {
+	if _, err := client.CreateNetwork(ctx, e.Network, !open); err != nil {
 		return e, err
 	}
 	proxy, err := client.Create(ctx, docker.CreateOptions{
-		Image: image, Entrypoint: "tinyproxy", Command: []string{"-d", "-c", "/hewitt/egress/tinyproxy.conf"},
-		Mounts: []docker.BindMount{{Source: e.ConfigDir, Target: "/hewitt/egress", ReadOnly: true}},
-		User:   fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), Workdir: "/tmp",
+		Image: image, Entrypoint: "hewitt", Command: []string{"gateway", "/hewitt/gateway/config.json"},
+		Mounts: []docker.BindMount{
+			{Source: filepath.Join(e.ConfigDir, "config.json"), Target: "/hewitt/gateway/config.json", ReadOnly: true},
+			{Source: e.StateDir(), Target: "/hewitt/state"},
+			{Source: caDir(dataDir), Target: "/hewitt/ca", ReadOnly: true},
+			{Source: secrets, Target: "/hewitt/secrets/claude", ReadOnly: true},
+		},
+		User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), Workdir: "/tmp",
 		ReadOnlyRoot: true, DisableTTY: true,
 	})
 	if err != nil {
-		return e, fmt.Errorf("egress network %q preserved: %w", e.Network, err)
+		return e, fmt.Errorf("gateway network %q preserved: %w", e.Network, err)
 	}
 	e.Proxy = proxy
 	if err := client.ConnectNetwork(ctx, e.Network, proxy, egressAlias); err != nil {
@@ -78,40 +156,9 @@ func createEgress(ctx context.Context, dataDir, image string, hosts []string) (E
 	return e, nil
 }
 
-// egressConfig renders the tinyproxy filter and configuration for hosts, each
-// "host" (port 443) or "host:port". The filter matches the whole request
-// target, so only CONNECT to a listed host and port passes; plain HTTP
-// requests carry a full URL, match no rule, and are refused.
-func egressConfig(hosts []string) (allow, conf string, err error) {
-	var filter strings.Builder
-	var ports []string
-	for _, entry := range hosts {
-		host, port, hasPort := strings.Cut(entry, ":")
-		if !hasPort {
-			port = "443"
-		}
-		if !egressHost.MatchString(host) {
-			return "", "", fmt.Errorf("egress.allow host %q must be a lowercase DNS name, optionally prefixed with *.", entry)
-		}
-		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
-			return "", "", fmt.Errorf("egress.allow entry %q must use a port from 1 to 65535", entry)
-		}
-		if !slices.Contains(ports, port) {
-			ports = append(ports, port)
-		}
-		name, wildcard := strings.CutPrefix(host, "*.")
-		quoted := strings.ReplaceAll(name, ".", `\.`)
-		fmt.Fprintf(&filter, "^%s:%s$\n", quoted, port)
-		if wildcard {
-			fmt.Fprintf(&filter, `\.%s:%s$`+"\n", quoted, port)
-		}
-	}
-	conf = "Port " + egressPort + "\nListen 0.0.0.0\nTimeout 600\nMaxClients 100\nLogLevel Notice\nDisableViaHeader Yes\n"
-	for _, port := range ports {
-		conf += "ConnectPort " + port + "\n"
-	}
-	conf += "FilterURLs On\nFilterExtended On\nFilterDefaultDeny Yes\nFilter \"/hewitt/egress/allow\"\n"
-	return filter.String(), conf, nil
+// gatewayMount gives an agent container the gateway CA certificate.
+func gatewayMount(dataDir string) docker.BindMount {
+	return docker.BindMount{Source: gateway.CACertPath(caDir(dataDir)), Target: gatewayCA, ReadOnly: true}
 }
 
 // openPorts lists the entries that name a port other than 443.
@@ -126,5 +173,5 @@ func openPorts(hosts []string) []string {
 }
 
 func (e Egress) preserved() string {
-	return fmt.Sprintf("egress proxy %q and network %q preserved", e.Proxy, e.Network)
+	return fmt.Sprintf("gateway %q and network %q preserved", e.Proxy, e.Network)
 }

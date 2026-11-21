@@ -24,18 +24,33 @@ func IsOnboarded(dataDir string) bool {
 // ShouldSyncConfigs reports whether host configs were opted into during
 // onboarding and should be refreshed before starting a session.
 func ShouldSyncConfigs(dataDir string) bool {
+	value := onboardedValue(dataDir)
+	return value == "1" || value == "secrets"
+}
+
+// SyncKeepsSecrets reports whether the user chose to import secret values
+// with host configs; by default they are removed.
+func SyncKeepsSecrets(dataDir string) bool {
+	return onboardedValue(dataDir) == "secrets"
+}
+
+func onboardedValue(dataDir string) string {
 	if !filepath.IsAbs(dataDir) {
-		return false
+		return ""
 	}
 	raw, err := os.ReadFile(filepath.Join(dataDir, onboardedFile))
 	if err != nil {
-		return false
+		return ""
 	}
-	return strings.TrimSpace(string(raw)) == "1"
+	return strings.TrimSpace(string(raw))
 }
 
-// MarkOnboarded records that initial onboarding has completed for dataDir.
-func MarkOnboarded(dataDir string) error {
+// MarkOnboarded records that initial onboarding has completed for dataDir
+// with host config sync; keepSecrets records that secret values are kept.
+func MarkOnboarded(dataDir string, keepSecrets bool) error {
+	if keepSecrets {
+		return markOnboardedWithValue(dataDir, "secrets\n")
+	}
 	return markOnboardedWithValue(dataDir, "1\n")
 }
 
@@ -112,13 +127,25 @@ func DetectHostConfigs(homeDir string) []string {
 	return found
 }
 
-// ImportHostConfigs copies non-credential host configurations (skills, MCP
-// servers, rules, commands, tmux config, and gitconfig/bashrc) from homeDir
-// into the private Hewitt profiles under dataDir. Top-level dotfile symlinks
-// are resolved; symlinks inside walked subdirectories are skipped.
-func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
+// ImportHostConfigs copies host configurations (skills, MCP servers, rules,
+// commands, tmux config, and gitconfig/bashrc) from homeDir into the private
+// Hewitt profiles under dataDir and returns the imported tools. Unless
+// keepSecrets is set, secret values are removed from the copies and reported
+// in redacted; credential files in imported directories are never copied.
+// Top-level dotfile symlinks are resolved; symlinks inside walked
+// subdirectories are skipped.
+func ImportHostConfigs(dataDir, homeDir, profileID string, keepSecrets bool) (imported, redacted []string, err error) {
 	if !filepath.IsAbs(homeDir) {
-		return nil, fmt.Errorf("home directory must be absolute")
+		return nil, nil, fmt.Errorf("home directory must be absolute")
+	}
+	r := &redactor{keep: keepSecrets, home: homeDir}
+	imported, err = importHostConfigs(dataDir, homeDir, profileID, r)
+	return imported, r.redacted, err
+}
+
+func importHostConfigs(dataDir, homeDir, profileID string, r *redactor) ([]string, error) {
+	copySafe := func(src, dst string, allowRootSymlink bool) (bool, error) {
+		return copyFiltered(src, dst, allowRootSymlink, r.filter)
 	}
 	if profileID == "" {
 		profileID = "default"
@@ -147,7 +174,7 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 			claudeImported = true
 		}
 	}
-	if copied, err := importClaudeMCP(filepath.Join(homeDir, ".claude.json"), filepath.Join(dirs["claude"], "home", ".claude.json")); err != nil {
+	if copied, err := importClaudeMCP(filepath.Join(homeDir, ".claude.json"), filepath.Join(dirs["claude"], "home", ".claude.json"), r); err != nil {
 		return nil, fmt.Errorf("import claude MCP config: %w", err)
 	} else if copied {
 		claudeImported = true
@@ -169,7 +196,7 @@ func ImportHostConfigs(dataDir, homeDir, profileID string) ([]string, error) {
 			codexImported = true
 		}
 	}
-	if copied, err := importCodexConfig(filepath.Join(homeDir, ".codex", "config.toml"), filepath.Join(dirs["codex"], "codex", "config.toml")); err != nil {
+	if copied, err := importCodexConfig(filepath.Join(homeDir, ".codex", "config.toml"), filepath.Join(dirs["codex"], "codex", "config.toml"), r); err != nil {
 		return nil, fmt.Errorf("import codex config.toml: %w", err)
 	} else if copied {
 		codexImported = true
@@ -357,7 +384,7 @@ func hasMCPServers(path string) bool {
 
 // importClaudeMCP extracts only the mcpServers field from ~/.claude.json so
 // MCP server definitions are imported without copying account state.
-func importClaudeMCP(src, dst string) (bool, error) {
+func importClaudeMCP(src, dst string, r *redactor) (bool, error) {
 	if !isTargetFile(src) {
 		return false, nil
 	}
@@ -377,6 +404,7 @@ func importClaudeMCP(src, dst string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	out, _ = r.filter(src, out, false)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
 	}
@@ -389,7 +417,7 @@ func importClaudeMCP(src, dst string) (bool, error) {
 // importCodexConfig copies ~/.codex/config.toml while stripping host-only
 // desktop app sections ([marketplaces.*], [plugins.*], [mcp_servers.node_repl*])
 // whose binaries/paths only exist in the host ChatGPT desktop app bundle.
-func importCodexConfig(src, dst string) (bool, error) {
+func importCodexConfig(src, dst string, r *redactor) (bool, error) {
 	if !isTargetFile(src) {
 		return false, nil
 	}
@@ -415,8 +443,8 @@ func importCodexConfig(src, dst string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
 	}
-	out := strings.TrimSpace(strings.Join(kept, "\n")) + "\n"
-	if err := os.WriteFile(dst, []byte(out), 0o600); err != nil {
+	out, _ := r.filter(src, []byte(strings.TrimSpace(strings.Join(kept, "\n"))+"\n"), false)
+	if err := os.WriteFile(dst, out, 0o600); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -427,6 +455,12 @@ func importCodexConfig(src, dst string) (bool, error) {
 // top-level dotfile symlink is resolved; symlinks inside directories are
 // always skipped.
 func copySafe(src, dst string, allowRootSymlink bool) (bool, error) {
+	return copyFiltered(src, dst, allowRootSymlink, nil)
+}
+
+// copyFiltered is copySafe with filter, when set, choosing the contents of
+// each file to write or skipping it; walked marks files found in a directory.
+func copyFiltered(src, dst string, allowRootSymlink bool, filter func(src string, data []byte, walked bool) ([]byte, bool)) (bool, error) {
 	info, err := os.Lstat(src)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -455,6 +489,12 @@ func copySafe(src, dst string, allowRootSymlink bool) (bool, error) {
 		data, err := os.ReadFile(src)
 		if err != nil {
 			return false, err
+		}
+		if filter != nil {
+			var skip bool
+			if data, skip = filter(src, data, false); skip {
+				return false, nil
+			}
 		}
 		if err := os.WriteFile(dst, data, 0o600); err != nil {
 			return false, err
@@ -492,6 +532,12 @@ func copySafe(src, dst string, allowRootSymlink bool) (bool, error) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if filter != nil {
+			var skip bool
+			if data, skip = filter(path, data, true); skip {
+				return nil
+			}
 		}
 		if err := os.WriteFile(target, data, 0o600); err != nil {
 			return err

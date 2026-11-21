@@ -19,13 +19,14 @@ func TestRunImagePrecedence(t *testing.T) {
 		{name: "exec has no default image", client: "codex", mode: "exec", target: "external"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := t.TempDir()
+			repo, data := t.TempDir(), t.TempDir()
 			if tt.file != "" {
 				if err := os.WriteFile(filepath.Join(repo, "hewitt.yml"), []byte(tt.file), 0o600); err != nil {
 					t.Fatal(err)
 				}
+				trustFile(t, data, filepath.Join(repo, "hewitt.yml"))
 			}
-			s, err := mergeSettings(AgentOptions{Agent: tt.client, Repository: repo, Image: tt.image, Mode: tt.mode, Target: tt.target})
+			s, err := mergeSettings(AgentOptions{Agent: tt.client, Repository: repo, DataDir: data, Image: tt.image, Mode: tt.mode, Target: tt.target})
 			if err != nil {
 				t.Fatal(err)
 			}
