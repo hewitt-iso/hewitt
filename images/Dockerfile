@@ -8,9 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 # GitHub host keys come from its TLS-authenticated metadata API; other hosts
 # are accepted on first use.
-RUN curl -fsSL https://api.github.com/meta \
-    | node -e 'const m=JSON.parse(require("fs").readFileSync(0));for(const k of m.ssh_keys)for(const h of ["github.com","ssh.github.com"])console.log(h+" "+k)' \
-    > /etc/ssh/ssh_known_hosts \
+# Shared CI runners hit the API's unauthenticated rate limit, so retry, and
+# fail on an error response instead of parsing it.
+RUN curl -fsSL --retry 5 --retry-delay 15 --retry-all-errors https://api.github.com/meta -o /tmp/github-meta.json \
+    && node -e 'const m=JSON.parse(require("fs").readFileSync(0));for(const k of m.ssh_keys)for(const h of ["github.com","ssh.github.com"])console.log(h+" "+k)' \
+    < /tmp/github-meta.json > /etc/ssh/ssh_known_hosts \
+    && rm /tmp/github-meta.json \
     && printf 'Host *\n    StrictHostKeyChecking accept-new\n' > /etc/ssh/ssh_config.d/hewitt.conf
 ENV HOME=/tmp TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/hewitt/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /tmp
