@@ -133,6 +133,9 @@ func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) 
 				return "", nil, err
 			}
 		}
+		if err := startObserver(ctx, m.Egress, stderr); err != nil {
+			return "", nil, err
+		}
 		if _, err := fmt.Fprintf(stderr, "Reusing workspace %s (%s)\n", m.Name, m.ID[:12]); err != nil {
 			return "", nil, err
 		}
@@ -200,12 +203,14 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if err := reportStep(stderr, "Opening "+choice+" in workspace"); err != nil {
 		return err
 	}
-	var env, files []string
+	env, files := runEnv(m.Egress, run.ID, choice), []string(nil)
 	if choice == "claude" {
 		// Chosen per launch, so a login after the workspace was created applies.
-		if env, files, err = agentToken(opts.DataDir, m.Profile, "claude", m.Egress != nil); err != nil {
+		token, tokenFiles, err := agentToken(opts.DataDir, m.Profile, "claude", m.Egress != nil)
+		if err != nil {
 			return err
 		}
+		env, files = append(env, token...), tokenFiles
 	}
 	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	var exit *exec.ExitError

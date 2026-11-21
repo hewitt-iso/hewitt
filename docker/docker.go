@@ -46,6 +46,8 @@ type CreateOptions struct {
 	Network string
 	// Runtime selects an installed OCI runtime such as runsc.
 	Runtime string
+	// PIDHost shares the host PID namespace; only Hewitt's observer uses it.
+	PIDHost bool
 	// Resource limits are applied only when set, using Docker's value syntax.
 	Memory, CPUs, PIDs string
 }
@@ -210,6 +212,9 @@ func containerArgs(opts CreateOptions) []string {
 	}
 	if opts.ReadOnlyRoot {
 		args = append(args, "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777")
+	}
+	if opts.PIDHost {
+		args = append(args, "--pid", "host")
 	}
 	for _, flag := range []struct{ name, value string }{
 		{"--network", opts.Network}, {"--runtime", opts.Runtime},

@@ -44,7 +44,14 @@ func TestClaudeReceivesPlaceholderBehindGateway(t *testing.T) {
 	}
 	placeholders := 0
 	for _, call := range calls(t, log) {
-		if strings.Contains(call, "--entrypoint hewitt ") {
+		if strings.Contains(call, " observe /hewitt/observer/config.json") {
+			// The observer holds file access; it receives no credentials.
+			if strings.Contains(call, secrets) || strings.Contains(call, "real-secret-token") {
+				t.Errorf("observer receives the token: %s", call)
+			}
+			continue
+		}
+		if strings.Contains(call, " gateway /hewitt/gateway/config.json") {
 			// Only the gateway mounts the token, read-only.
 			if !strings.Contains(call, "src="+secrets+",dst=/hewitt/secrets/claude,readonly") {
 				t.Errorf("gateway without the token: %s", call)

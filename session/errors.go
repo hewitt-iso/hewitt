@@ -23,6 +23,18 @@ func (*RequestNotFoundError) Hint() string {
 	return "hewitt requests -a lists requests of all sessions"
 }
 
+// UnattributedRequestError is a request that carried no agent connection, so
+// abort could deny it but stop no agent.
+type UnattributedRequestError struct{ Number int }
+
+func (e *UnattributedRequestError) Error() string {
+	return fmt.Sprintf("request #%d was denied, but it names no agent connection to stop", e.Number)
+}
+
+func (*UnattributedRequestError) Hint() string {
+	return "a process outside Hewitt's agent launches made it; hewitt stop <session> stops the whole workspace"
+}
+
 // UntrustedProjectError is a hewitt.yml with sensitive settings that the user
 // has not trusted in its current form. Digest identifies the reviewed contents.
 type UntrustedProjectError struct {

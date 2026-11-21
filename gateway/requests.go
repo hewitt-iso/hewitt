@@ -18,11 +18,14 @@ import (
 // to an unlisted host in the state directory and waits; the user allows or
 // denies it from the host. Only the gateway and the host CLI can write here.
 
-// Request is one recorded SRNA.
+// Request is one recorded SRNA. Run and Agent name the agent connection that
+// made it when the request carried them; abort stops that connection.
 type Request struct {
 	ID      string    `json:"id"`
 	Kind    string    `json:"kind"`
 	Target  string    `json:"target"`
+	Run     string    `json:"run,omitempty"`
+	Agent   string    `json:"agent,omitempty"`
 	Created time.Time `json:"created"`
 	// Decision is "allow", "deny", or empty while pending.
 	Decision string `json:"-"`
@@ -84,13 +87,13 @@ func Decide(state, id string, allow bool) error {
 	return writeAtomic(filepath.Join(decisionsDir(state), id), []byte(decision+"\n"))
 }
 
-// record adds a pending request and returns it.
-func record(state, kind, target string) (Request, error) {
+// Record adds r as a pending request with a new ID and returns it.
+func Record(state string, r Request) (Request, error) {
 	random := make([]byte, 6)
 	if _, err := rand.Read(random); err != nil {
 		return Request{}, err
 	}
-	r := Request{ID: hex.EncodeToString(random), Kind: kind, Target: target, Created: time.Now().UTC()}
+	r.ID, r.Created, r.Decision = hex.EncodeToString(random), time.Now().UTC(), ""
 	data, err := json.Marshal(r)
 	if err != nil {
 		return Request{}, err

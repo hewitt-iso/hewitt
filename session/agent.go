@@ -342,6 +342,16 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		create.Network = e.Network
 		create.Env = append(create.Env, proxyEnv(e.Open)...)
 		create.Mounts = append(create.Mounts, gatewayMount(opts.DataDir))
+		if key != "" && s.Isolation != "shared" {
+			// Agents share the container and its UID, so the observer tells
+			// them apart and holds access to each other's logins.
+			token := observerToken()
+			if err := createObserver(ctx, image, &e, token); err != nil {
+				return "", fmt.Errorf("%s: %w", preserved, err)
+			}
+			preserved += fmt.Sprintf("; observer %q preserved", e.Observer)
+			create.Env = append(create.Env, "HEWITT_OBSERVE="+token)
+		}
 	}
 	if adapter != nil && adapter.TokenVariable() != "" {
 		// A legacy terminal starts the agent with the container, so its
@@ -400,6 +410,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		return "", fmt.Errorf("container %s preserved: %w", metadata.ID, err)
 	}
 	if err := (docker.Client{}).Start(ctx, metadata.ID); err != nil {
+		return "", fmt.Errorf("%s: %w", preserved, err)
+	}
+	if err := startObserver(ctx, m.Egress, stderr); err != nil {
 		return "", fmt.Errorf("%s: %w", preserved, err)
 	}
 	if key == "" {

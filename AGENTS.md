@@ -49,6 +49,12 @@ do not make separate API credits a prerequisite.
   with the host through its state directory, and TLS interception only for hosts
   whose placeholder credentials it replaces. Agents must never receive what it
   holds; it depends on neither Docker nor Cobra.
+- `observer`: the per-workspace fanotify observer run by `hewitt observe`. It is
+  the only privileged helper: root with CAP_SYS_ADMIN, CAP_SYS_PTRACE, and
+  CAP_DAC_READ_SEARCH in the host PID namespace just long enough to attach its
+  marks, then the user's UID with no capabilities and no network. Keep agent
+  containers unprivileged; attribution comes from HEWITT_RUN and HEWITT_AGENT
+  of a launch's topmost process.
 - `profile`: private agent-scoped directories for native client state, the
   shared `<data_dir>/tools` cache, and `<data_dir>/secrets`, which only gateways
   mount; credentials are managed by the native clients.

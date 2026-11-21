@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -100,7 +102,8 @@ func (s *Server) handle(conn net.Conn) {
 	target := net.JoinHostPort(host, port)
 	inject := s.injection(host, port)
 	if inject == nil {
-		allowed, reason := s.permit(target, host, port)
+		run, agent := runOf(req)
+		allowed, reason := s.permit(Request{Kind: "network", Target: target, Run: run, Agent: agent}, host, port)
 		s.Log.Printf("%s %s", reason, target)
 		if !allowed {
 			refuse(conn, http.StatusForbidden, "hewitt gateway: "+reason+" "+target)
@@ -134,16 +137,16 @@ func (s *Server) handle(conn net.Conn) {
 }
 
 // permit applies the host policy; an unlisted host waits for a decision.
-func (s *Server) permit(target, host, port string) (bool, string) {
+func (s *Server) permit(r Request, host, port string) (bool, string) {
 	if s.cfg.Open {
 		return true, "open"
 	}
 	if match(s.rules, host, port) {
 		return true, "allow"
 	}
-	id, decision, err := s.request(target)
+	id, decision, err := s.request(r)
 	if err != nil {
-		s.Log.Printf("record request for %s: %v", target, err)
+		s.Log.Printf("record request for %s: %v", r.Target, err)
 		return false, "deny"
 	}
 	deadline := time.Now().Add(time.Duration(s.cfg.Wait) * time.Second)
@@ -160,23 +163,47 @@ func (s *Server) permit(target, host, port string) (bool, string) {
 	return false, "pending approval " + id + " (hewitt approve " + id + ")"
 }
 
-// request returns the latest request for target with its decision, or records
-// a new pending one.
-func (s *Server) request(target string) (string, string, error) {
+// request returns the latest request for the same target with its decision,
+// or records r as a new pending one.
+func (s *Server) request(r Request) (string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list, err := Requests(s.cfg.StateDir)
 	if err != nil {
 		return "", "", err
 	}
-	for _, r := range slices.Backward(list) {
-		if r.Kind == "network" && r.Target == target {
-			return r.ID, r.Decision, nil
+	for _, old := range slices.Backward(list) {
+		if old.Kind == r.Kind && old.Target == r.Target {
+			return old.ID, old.Decision, nil
 		}
 	}
-	r, err := record(s.cfg.StateDir, "network", target)
+	r, err = Record(s.cfg.StateDir, r)
 	return r.ID, "", err
 }
+
+// runOf reads the agent connection from the proxy credentials Hewitt gives
+// each launch (http://<run>:<agent>@host:port). Requests without them, or
+// with altered ones, are attributed to no connection.
+func runOf(req *http.Request) (run, agent string) {
+	encoded, ok := strings.CutPrefix(req.Header.Get("Proxy-Authorization"), "Basic ")
+	if !ok {
+		return "", ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", ""
+	}
+	run, agent, _ = strings.Cut(string(decoded), ":")
+	if !runID.MatchString(run) || !agentName.MatchString(agent) {
+		return "", ""
+	}
+	return run, agent
+}
+
+var (
+	runID     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+)
 
 func (s *Server) decision(id string) string {
 	data, err := os.ReadFile(decisionsDir(s.cfg.StateDir) + "/" + id)

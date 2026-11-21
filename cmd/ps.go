@@ -86,7 +86,7 @@ func newPSCommand(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("write session list: %w", err)
 			}
 			if len(pending) > 0 {
-				_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Suspicious requests need approval (SRNA): hewitt requests, then hewitt approve or hewitt deny <request>")
+				_, err := fmt.Fprintln(cmd.ErrOrStderr(), "Suspicious requests need approval (SRNA): hewitt requests, then hewitt approve, deny, or abort <numbers>")
 				return err
 			}
 			return nil

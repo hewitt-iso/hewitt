@@ -39,8 +39,8 @@ var (
 	exampleFiles = []string{".env.example", ".env.sample", ".env.template"}
 )
 
-// sensitiveFile reports names that usually are credentials or private keys.
-func sensitiveFile(name string) bool {
+// SensitiveFile reports names that usually are credentials or private keys.
+func SensitiveFile(name string) bool {
 	lower := strings.ToLower(name)
 	if lower == ".env" || strings.HasPrefix(lower, ".env.") && !slices.Contains(exampleFiles, lower) {
 		return true
@@ -85,7 +85,7 @@ func (r *redactor) note(path, what string) {
 // filter returns the contents to write for the host file src, or skip for a
 // credential file in an imported directory.
 func (r *redactor) filter(src string, data []byte, walked bool) (out []byte, skip bool) {
-	if walked && sensitiveFile(filepath.Base(src)) {
+	if walked && SensitiveFile(filepath.Base(src)) {
 		r.note(src, "file not copied")
 		return nil, true
 	}

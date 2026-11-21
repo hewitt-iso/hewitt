@@ -24,6 +24,17 @@ type Egress struct {
 	Hosts     []string `json:"hosts"`
 	// Open gateways pass every host; others hold unlisted hosts for approval.
 	Open bool `json:"open,omitempty"`
+	// Observer is the container that holds agents' access to other agents'
+	// logins and to credential files, when the session has one.
+	Observer string `json:"observer,omitempty"`
+}
+
+// helpers lists the session's Hewitt-owned helper containers.
+func (e Egress) helpers() []string {
+	if e.Observer != "" {
+		return []string{e.Proxy, e.Observer}
+	}
+	return []string{e.Proxy}
 }
 
 // StateDir holds the session's requests for approval and their decisions.
@@ -55,6 +66,23 @@ func proxyEnv(open bool) []string {
 	env := []string{"HTTPS_PROXY=" + proxy, "https_proxy=" + proxy,
 		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1", "NODE_EXTRA_CA_CERTS=" + gatewayCA}
 	if !open {
+		env = append(env, "HTTP_PROXY="+proxy, "http_proxy="+proxy)
+	}
+	return env
+}
+
+// runEnv identifies one agent connection to Hewitt's gateway and observer:
+// HEWITT_RUN and HEWITT_AGENT mark its processes, and the proxy credentials
+// mark its connections, so requests that need approval name the agent and
+// abort can stop it. Requests without these are attributed to no connection.
+func runEnv(e *Egress, run, agent string) []string {
+	env := []string{"HEWITT_RUN=" + run, "HEWITT_AGENT=" + agent}
+	if e == nil {
+		return env
+	}
+	proxy := "http://" + run + ":" + agent + "@" + egressAlias + ":" + egressPort
+	env = append(env, "HTTPS_PROXY="+proxy, "https_proxy="+proxy)
+	if !e.Open {
 		env = append(env, "HTTP_PROXY="+proxy, "http_proxy="+proxy)
 	}
 	return env

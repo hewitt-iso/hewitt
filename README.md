@@ -450,11 +450,59 @@ state, or credentials.
   OpenTelemetry exporter does for an `http://` endpoint.
 - **Suspicious requests need approval (SRNA).** A restricted gateway holds a
   connection to any other host for about a minute instead of refusing it.
-  `hewitt ps` shows such sessions as `SRNA (n)`; `hewitt requests` lists the
-  requests, and `hewitt approve <request>` or `hewitt deny <request>` decides.
-  A waiting connection proceeds or fails at once; an agent that retries later
-  proceeds once approved. Decisions apply to later connections to the same
-  host and port, and the gateway logs every decision (`docker logs`).
+  The file observer (below) holds file access the same way. See
+  [Approving suspicious requests](#approving-suspicious-requests).
+
+### File observer
+
+Agents of one workspace share its container and UID, so mounts cannot keep
+them out of each other's profiles. In `isolated`, `restricted`, and
+`hardened` workspaces, a Hewitt observer container holds such access instead:
+
+- An agent opening another agent's profile (for example Codex reading
+  `/hewitt/profiles/claude`, where Claude's login lives) waits for approval.
+  An agent's own profile, and everything the `hewitt shell` user opens, pass.
+- Opening or creating a credential file in the workspace (`.env*` other than
+  examples, `*.pem`, `*.key`, `credentials`, `auth.json`, SSH keys) waits for
+  approval.
+- Processes are attributed to the agent launch they descend from: each launch
+  gets `HEWITT_RUN` and `HEWITT_AGENT`, and the topmost process of a launch
+  decides, so a child cannot claim another agent's identity. A process outside
+  every launch is unattributed (`-`), and its access to any profile waits.
+- The observer starts as root in the host PID namespace with `CAP_SYS_ADMIN`,
+  `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH`, `CAP_SETUID`, and `CAP_SETGID`, only
+  to find the workspace container and attach fanotify permission marks to its
+  profile and workspace mounts. It then switches to your UID with no
+  capabilities, has no network, and exits when the workspace stops; agent
+  containers keep their dropped capabilities. It needs a kernel with fanotify
+  permission events; if it cannot attach, `run` warns and the session continues
+  without it. `docker logs` of the observer shows every decision.
+
+### Approving suspicious requests
+
+`hewitt ps` shows sessions with pending requests as `SRNA (n)`. `hewitt
+requests` lists them with a number, the session, the agent that made the
+request, and its target; `-a` includes decided ones. A number is assigned the
+first time a request is listed and never changes, so numbers you read stay
+valid when new requests arrive.
+
+```sh
+hewitt requests
+hewitt approve 1-3 7      # allow; later requests for the same target pass
+hewitt deny 6-9           # refuse; later requests for the same target fail
+hewitt abort 4 5          # refuse and kill the agent launches that asked
+hewitt approve {10..12}   # shell brace expansion also works
+```
+
+Every selected number must exist, or nothing is decided. A waiting request
+proceeds or fails at once; one that waited about a minute without a decision
+is refused, and an agent that retries follows the decision made meanwhile.
+Network decisions apply to the session's later connections to the same host
+and port; file decisions apply to the same file for the same agent. `abort`
+kills every process of the launch in the workspace container, including
+background children; a request without an agent launch is denied but stops
+nothing. Restricted sessions name the agent of network requests through
+per-launch proxy credentials (`http://<run>:<agent>@hewitt-egress:3128`).
 
 An allowlist does not stop deliberate exfiltration through an allowed host:
 an agent that can reach `github.com` can push data to any repository there.

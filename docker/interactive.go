@@ -48,3 +48,20 @@ func (Client) ExecInteractive(ctx context.Context, id string, env, envFiles, com
 	}
 	return nil
 }
+
+// Exec runs command in a running container as its configured user and returns
+// its standard output. Arguments are passed directly, never through a shell.
+func (c Client) Exec(ctx context.Context, id string, command []string) (string, error) {
+	if err := validateArgument("container ID", id); err != nil {
+		return "", err
+	}
+	if len(command) == 0 {
+		return "", fmt.Errorf("exec command must not be empty")
+	}
+	for _, arg := range command {
+		if strings.ContainsRune(arg, 0) {
+			return "", fmt.Errorf("exec command contains NUL")
+		}
+	}
+	return c.execute(ctx, append([]string{"container", "exec", "--", id}, command...)...)
+}

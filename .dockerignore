@@ -9,6 +9,7 @@
 !config/
 !docker/
 !gateway/
+!observer/
 !profile/
 !session/
 !terminal/

@@ -59,8 +59,9 @@ esac
 	}
 	raw, _ := os.ReadFile(log)
 	calls := string(raw)
-	// The workspace container and its gateway, each started again on reuse.
-	if strings.Count(calls, "container create ") != 2 || strings.Count(calls, "container start ") != 4 {
+	// The workspace container, its gateway, and its observer, each started
+	// again on reuse (the fake reports them stopped).
+	if strings.Count(calls, "container create ") != 3 || strings.Count(calls, "container start ") != 6 {
 		t.Fatalf("lifecycle = %s", calls)
 	}
 	for _, want := range []string{"--entrypoint sleep", "agent:test infinity", "HEWITT_HOST_TERMINAL=1", "hewitt-agent run claude", "hewitt-agent run shell", "/hewitt/profiles/codex", "/hewitt/profiles/claude"} {
