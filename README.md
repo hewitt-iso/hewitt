@@ -46,6 +46,19 @@ press Q or Ctrl-C to cancel before workspace setup starts. Open `hewitt` in
 another host tmux window to choose another agent in the same workspace container.
 First-time users complete the optional 3-step onboarding flow first.
 
+Onboarding can import host settings (Claude, Codex, and OpenCode rules,
+skills, MCP servers, and settings; tmux; git and bash defaults) into the agent
+profiles, and `run` refreshes them before each start. Agents can read and send
+anything in their profiles, so secret values are removed from the copies by
+default: MCP `env` and `headers`, provider `apiKey` entries, `bearer_token`,
+secret-looking shell exports and git settings, URL credentials, secret command
+flags, and well-known token formats. References such as `${GITHUB_TOKEN}` stay.
+Onboarding lists what it removed and asks whether to keep the values instead.
+Files that usually are credentials (`.env*` other than examples, `*.pem`,
+`*.key`, `credentials`, `auth.json`, SSH private keys) are never copied from
+imported directories. Copying host logins into profiles is a separate,
+explicit choice; a `hewitt login` in the container is recommended instead.
+
 After selection, progress messages show configuration sync, workspace lookup or
 creation, profile and tool cache preparation, repository initialization, and
 container startup. Existing workspaces report reuse or restart. The container

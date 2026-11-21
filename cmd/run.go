@@ -138,7 +138,7 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 			if prof == "" {
 				prof = "default"
 			}
-			_, _ = profile.ImportHostConfigs(cfg.DataDir, homeDir, prof)
+			_, _, _ = profile.ImportHostConfigs(cfg.DataDir, homeDir, prof, profile.SyncKeepsSecrets(cfg.DataDir))
 		}
 	}
 	id, err := trustAndRetry(cmd, cfg.DataDir, func() (string, error) {

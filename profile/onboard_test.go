@@ -16,7 +16,7 @@ func TestOnboardMarker(t *testing.T) {
 	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
 		t.Fatalf("IsOnboarded created data directory: %v", err)
 	}
-	if err := MarkOnboarded(dataDir); err != nil {
+	if err := MarkOnboarded(dataDir, false); err != nil {
 		t.Fatal(err)
 	}
 	if !IsOnboarded(dataDir) {
@@ -91,7 +91,7 @@ func TestImportHostConfigsAndCredentials(t *testing.T) {
 		t.Fatalf("DetectHostCredentials = %v, want %v", got, want)
 	}
 
-	importedCfg, err := ImportHostConfigs(dataDir, home, "default")
+	importedCfg, _, err := ImportHostConfigs(dataDir, home, "default", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestImportOpenCodeTUIOnly(t *testing.T) {
 			if got := DetectHostConfigs(home); !reflect.DeepEqual(got, []string{"opencode"}) {
 				t.Fatalf("detected = %v", got)
 			}
-			if _, err := ImportHostConfigs(data, home, "personal"); err != nil {
+			if _, _, err := ImportHostConfigs(data, home, "personal", false); err != nil {
 				t.Fatal(err)
 			}
 			dst := filepath.Join(data, "profiles", "opencode", "personal", "config", "opencode", name)

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -49,10 +50,21 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 	if err != nil {
 		return false, err
 	}
+	keepSecrets := false
 	if step1 == 0 {
-		imported, err := profile.ImportHostConfigs(cfg.DataDir, homeDir, profileID)
+		imported, redacted, err := profile.ImportHostConfigs(cfg.DataDir, homeDir, profileID, false)
 		if err != nil {
 			return false, err
+		}
+		if len(redacted) > 0 {
+			if keepSecrets, err = confirmSecrets(in, stderr, redacted); err != nil {
+				return false, err
+			}
+			if keepSecrets {
+				if imported, _, err = profile.ImportHostConfigs(cfg.DataDir, homeDir, profileID, true); err != nil {
+					return false, err
+				}
+			}
 		}
 		if len(imported) > 0 {
 			if _, err := fmt.Fprintf(stderr, "  %sImported configs: %s%s\r\n\r\n", ansiDim, strings.Join(imported, ", "), ansiReset); err != nil {
@@ -89,20 +101,21 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 
 	// Step 3: Share credentials.
 	detectedCreds := profile.DetectHostCredentials(homeDir)
-	shareCredLabel := "copy     (import host credentials)"
+	shareCredLabel := "copy     (host logins; agents in containers can read them)"
 	if len(detectedCreds) > 0 {
-		shareCredLabel = fmt.Sprintf("copy     (%s)", strings.Join(detectedCreds, ", "))
+		shareCredLabel = fmt.Sprintf("copy     (%s; agents in containers can read them)", strings.Join(detectedCreds, ", "))
 	}
+	// A separate login keeps host logins out of containers, so it comes first.
 	step3, err := pickOption(in, stderr, "[3/3] Share credentials?", []string{
+		"login    (hewitt login; recommended)",
 		shareCredLabel,
-		"login    (hewitt login)",
 		"skip     (configure later)",
 	}, "onboarding cancelled", "write onboarding prompt")
 	if err != nil {
 		return false, err
 	}
 	switch step3 {
-	case 0:
+	case 1:
 		imported, err := profile.ImportHostCredentials(cfg.DataDir, homeDir, profileID)
 		if err != nil {
 			return false, err
@@ -116,7 +129,7 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 				return false, err
 			}
 		}
-	case 1:
+	case 0:
 		_, _ = fmt.Fprint(stderr, "\r\n")
 		agents := agent.Names
 		agentIdx, err := pickOption(in, stderr, "Select agent to log in", agents, "onboarding cancelled", "write onboarding prompt")
@@ -138,7 +151,7 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 	}
 
 	if step1 == 0 {
-		if err := profile.MarkOnboarded(cfg.DataDir); err != nil {
+		if err := profile.MarkOnboarded(cfg.DataDir, keepSecrets); err != nil {
 			return false, err
 		}
 	} else {
@@ -147,4 +160,24 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 		}
 	}
 	return startWorkspace, nil
+}
+
+// confirmSecrets lists the secret values removed from imported configs and
+// asks whether agents may have them after all. Removal is the default.
+func confirmSecrets(in io.Reader, stderr io.Writer, redacted []string) (bool, error) {
+	if _, err := fmt.Fprintf(stderr, "  Secret values found in host configs:\r\n"); err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(profile.Summary(redacted, 8), "\n") {
+		if _, err := fmt.Fprintf(stderr, "  %s%s%s\r\n", ansiDim, line, ansiReset); err != nil {
+			return false, err
+		}
+	}
+	_, _ = fmt.Fprint(stderr, "\r\n")
+	choice, err := pickOption(in, stderr, "Copy these values into agent profiles?", []string{
+		"remove   (recommended; settings are imported without the values)",
+		"keep     (agents in containers can read and send these values)",
+	}, "onboarding cancelled", "write onboarding prompt")
+	_, _ = fmt.Fprint(stderr, "\r\n")
+	return choice == 1, err
 }
