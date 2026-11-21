@@ -32,8 +32,9 @@ func NewRootCommand(version string) *cobra.Command {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Help/version/completion bypass configuration loading so they stay
 			// available when configuration is missing or broken.
-			// The gateway and observer run in their containers and read only their own files.
-			if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "gateway" || cmd.Name() == "observe" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion") {
+			// The gateway and observer run in their containers and read only their
+			// own files; the SRNA prompt receives its data directory from Hewitt.
+			if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "gateway" || cmd.Name() == "observe" || cmd.Name() == "srna-prompt" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion") {
 				return nil
 			}
 			loaded, err := config.Load(configPath)
@@ -65,6 +66,7 @@ func NewRootCommand(version string) *cobra.Command {
 	auth := &cobra.Command{Use: "auth", Short: "Manage native agent authentication", Args: cobra.NoArgs}
 	auth.AddCommand(newAgentCommand("login", &cfg), newAgentCommand("status", &cfg), newAgentCommand("logout", &cfg), newAgentCommand("relogin", &cfg))
 	cmd.AddCommand(auth, newPSCommand(&cfg), newAttachCommand(&cfg), newTrustCommand(&cfg), newGatewayCommand(),
-		newRequestsCommand(&cfg), newDecideCommand(&cfg, "approve"), newDecideCommand(&cfg, "deny"), newDecideCommand(&cfg, "abort"), newObserveCommand())
+		newRequestsCommand(&cfg), newDecideCommand(&cfg, "approve"), newDecideCommand(&cfg, "deny"), newDecideCommand(&cfg, "abort"), newObserveCommand(),
+		newSRNAPromptCommand(), newStatusCommand(&cfg))
 	return cmd
 }

@@ -188,6 +188,7 @@ create_worktree_if_needed() {
 		wt_path="$HEWITT_WORKTREES_DIR/$branch"
 		if [ ! -e "$wt_path" ] && ! git -C "$HEWITT_REPO" show-ref --verify --quiet "refs/heads/$branch"; then
 			if git -C "$HEWITT_REPO" worktree add -b "$branch" -- "$wt_path" "$base" >&2; then
+				printf '[hewitt] Branch %s\n' "$branch" >&2
 				break
 			fi
 			# Another host terminal may have claimed this branch since our check.
@@ -232,6 +233,39 @@ exec_agent() {
 		done
 	fi
 
+	# A task from hewitt run -p arrives base64-encoded in HEWITT_PROMPT_B64,
+	# since environment entries cannot hold newlines, and becomes the agent's
+	# own prompt argument. Headless runs use the agent's non-interactive mode,
+	# where it cannot ask, so its permission prompts are off: the container,
+	# gateway, and observer are the boundary.
+	local prompt="" headless="${HEWITT_HEADLESS:-}"
+	if [ -n "${HEWITT_PROMPT_B64:-}" ]; then
+		prompt="$(printf '%s' "$HEWITT_PROMPT_B64" | base64 -d)"
+	fi
+	unset HEWITT_PROMPT_B64 HEWITT_HEADLESS
+	local -a task=()
+	if [ -n "$prompt" ]; then
+		case "$agent" in
+		claude)
+			task=(-- "$prompt")
+			if [ -n "$headless" ]; then task=(-p --permission-mode bypassPermissions -- "$prompt"); fi
+			;;
+		codex) task=(-- "$prompt") ;;
+		opencode)
+			task=("--prompt=$prompt")
+			if [ -n "$headless" ]; then task=(run -- "$prompt"); fi
+			;;
+		pi)
+			task=(-- "$prompt")
+			if [ -n "$headless" ]; then task=(-p -- "$prompt"); fi
+			;;
+		*)
+			printf '%s does not accept a task from Hewitt yet; start it without -p\n' "$agent" >&2
+			exit 2
+			;;
+		esac
+	fi
+
 	printf '[hewitt] Launching %s...\n' "$agent" >&2
 	case "$agent" in
 	claude)
@@ -246,10 +280,13 @@ exec_agent() {
 			-u CLAUDE_CODE_USE_BEDROCK \
 			-u CLAUDE_CODE_USE_VERTEX \
 			-u CLAUDE_CODE_USE_FOUNDRY \
-			claude "$@"
+			claude "$@" "${task[@]}"
 		;;
 	codex)
 		export CODEX_HOME="$profile_root/codex"
+		# Docker is Codex's sandbox; exec is its non-interactive mode.
+		local -a codex_mode=(--sandbox danger-full-access)
+		if [ -n "$headless" ]; then codex_mode=(exec --dangerously-bypass-approvals-and-sandbox); fi
 		exec env \
 			-u OPENAI_API_KEY \
 			-u CODEX_API_KEY \
@@ -257,7 +294,7 @@ exec_agent() {
 			-u OPENAI_BASE_URL \
 			-u OPENAI_IDENTITY_TOKEN_FILE \
 			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
-			codex --sandbox danger-full-access -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@"
+			codex "${codex_mode[@]}" -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@" "${task[@]}"
 		;;
 	opencode)
 		export OPENCODE_DISABLE_AUTOUPDATE=1
@@ -265,11 +302,11 @@ exec_agent() {
 			-u OPENCODE_DISABLE_DEFAULT_PLUGINS \
 			-u OPENCODE_CONFIG \
 			-u OPENCODE_CONFIG_CONTENT \
-			opencode "$@"
+			opencode "$@" "${task[@]}"
 		;;
 	pi)
 		export PI_CODING_AGENT_DIR="$profile_root/pi" PI_SKIP_VERSION_CHECK=1
-		launch pi "$@"
+		launch pi "$@" "${task[@]}"
 		;;
 	antigravity)
 		launch agy "$@"

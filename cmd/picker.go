@@ -96,6 +96,7 @@ const (
 	ansiGreen     = "\x1b[32m"
 	ansiBoldGreen = "\x1b[1;32m"
 	ansiYellow    = "\x1b[33m"
+	ansiBoldRed   = "\x1b[1;31m"
 )
 
 func styleStatus(status string) string {

@@ -62,6 +62,10 @@ type Adapter interface {
 // profiles or build allowlists for every agent iterate over it.
 var Names = []string{"claude", "codex", "opencode", "pi", "antigravity"}
 
+// TaskAgents accept a task from hewitt run -p as their initial prompt, and
+// run it without their interface when headless.
+var TaskAgents = []string{"claude", "codex", "opencode", "pi"}
+
 // Lookup selects an implemented adapter. Unsupported clients fail explicitly.
 func Lookup(name string) (Adapter, error) {
 	switch name {

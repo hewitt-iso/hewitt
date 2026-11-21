@@ -143,9 +143,11 @@ func (p *policy) request(path string, o Opener) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	// A decision covers the agent's later launches; a pending request is
+	// shared only within its launch, so each launch's pane can ask.
 	for i := len(list) - 1; i >= 0; i-- {
 		r := list[i]
-		if r.Kind == "file" && r.Target == path && r.Agent == o.Agent {
+		if r.Kind == "file" && r.Target == path && r.Agent == o.Agent && (r.Decision != "" || r.Run == o.Run) {
 			return r.ID, r.Decision, nil
 		}
 	}
