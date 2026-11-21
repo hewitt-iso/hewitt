@@ -221,12 +221,6 @@ exec_agent() {
 	export XDG_CACHE_HOME="$profile_root/cache"
 	mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$profile_root/$agent" 2>/dev/null || true
 
-	if [ -f "$profile_root/token.env" ]; then
-		set -a
-		# shellcheck disable=SC1090
-		. "$profile_root/token.env"
-		set +a
-	fi
 
 	# Wait briefly for the tmux client to attach so terminal background/palette
 	# queries (OSC 10/11 via tmux passthrough) reach the host terminal.

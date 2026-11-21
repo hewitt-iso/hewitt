@@ -97,6 +97,40 @@ func privateDir(path string) error {
 
 const tokenFile = "token.env"
 
+// PrepareSecrets returns the private directory for the client's long-lived
+// token, <dataDir>/secrets/<client>/<id>. Unlike profiles it is never mounted
+// into agent containers: only Hewitt's gateway reads it, so agents hold a
+// placeholder instead of the token. A token saved in the profile by earlier
+// versions is moved here.
+func PrepareSecrets(dataDir, client, id string) (string, error) {
+	profileDir, err := Prepare(dataDir, client, id)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	current := root
+	for _, component := range []string{"secrets", client, id} {
+		current = filepath.Join(current, component)
+		if err := privateDir(current); err != nil {
+			return "", err
+		}
+	}
+	old := filepath.Join(profileDir, tokenFile)
+	if _, err := os.Lstat(old); err == nil {
+		if _, err := os.Lstat(filepath.Join(current, tokenFile)); os.IsNotExist(err) {
+			if err := os.Rename(old, filepath.Join(current, tokenFile)); err != nil {
+				return "", fmt.Errorf("move token out of the profile: %w", err)
+			}
+		} else if err := os.Remove(old); err != nil {
+			return "", fmt.Errorf("remove token from the profile: %w", err)
+		}
+	}
+	return current, nil
+}
+
 // SaveToken stores a long-lived token that the user copied from the native
 // client's official login output, as a private Docker env file in the profile.
 // The value is validated but never logged; the write is atomic.
@@ -122,7 +156,7 @@ func SaveToken(dir, variable, token string) error {
 	return nil
 }
 
-// TokenFile returns the profile's token env file, or "" when none was saved.
+// TokenFile returns the token env file in dir, or "" when none was saved.
 // Symlinks and files readable by group or other users are refused.
 func TokenFile(dir string) (string, error) {
 	path := filepath.Join(dir, tokenFile)

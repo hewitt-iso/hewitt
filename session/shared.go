@@ -200,7 +200,14 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if err := reportStep(stderr, "Opening "+choice+" in workspace"); err != nil {
 		return err
 	}
-	err = (docker.Client{}).ExecInteractive(ctx, m.ID, command, in, out, stderr)
+	var env, files []string
+	if choice == "claude" {
+		// Chosen per launch, so a login after the workspace was created applies.
+		if env, files, err = agentToken(opts.DataDir, m.Profile, "claude", m.Egress != nil); err != nil {
+			return err
+		}
+	}
+	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	var exit *exec.ExitError
 	if ctx.Err() == nil && errors.As(err, &exit) {
 		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}

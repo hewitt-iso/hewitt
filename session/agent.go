@@ -295,29 +295,34 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if s.Telemetry != "" {
 		create.Env = append(create.Env, telemetryEnv(s.Telemetry)...)
 	}
-	if s.egress() {
+	if s.gateway() {
 		image := s.EgressImage
 		if image == "" {
 			image = DefaultEgressImage
 		}
-		var hosts []string
-		if adapter != nil {
-			hosts = append(hosts, adapter.Hosts()...)
-		} else {
-			for _, name := range agent.Names {
-				if a, err := agent.Lookup(name); err == nil {
-					hosts = append(hosts, a.Hosts()...)
-				}
-			}
-		}
-		if err := reportStep(stderr, "Preparing network and egress proxy"); err != nil {
+		if err := refreshImage(ctx, image, stderr); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
-		allow := s.Allow
-		if s.Telemetry != "" {
-			allow = append(slices.Clone(allow), telemetryAllow(s.Telemetry))
+		var hosts, allow []string
+		if s.egress() {
+			if adapter != nil {
+				hosts = append(hosts, adapter.Hosts()...)
+			} else {
+				for _, name := range agent.Names {
+					if a, err := agent.Lookup(name); err == nil {
+						hosts = append(hosts, a.Hosts()...)
+					}
+				}
+			}
+			allow = s.Allow
+			if s.Telemetry != "" {
+				allow = append(slices.Clone(allow), telemetryAllow(s.Telemetry))
+			}
 		}
-		e, err := createEgress(ctx, opts.DataDir, image, append(hosts, allow...))
+		if err := reportStep(stderr, "Preparing network and gateway"); err != nil {
+			return "", fmt.Errorf("%s: %w", preserved, err)
+		}
+		e, err := createGateway(ctx, opts.DataDir, image, s.Profile, !s.egress(), append(hosts, allow...))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
@@ -328,14 +333,27 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 				return "", fmt.Errorf("%s: %w", preserved, err)
 			}
 		}
-		if strings.HasPrefix(s.Telemetry, "http://") {
-			// The proxy refuses plain HTTP; only Claude Code tunnels an http:// endpoint.
-			if err := warn(stderr, "telemetry.endpoint uses http://; through the egress proxy only Claude Code delivers it, so use https:// for Codex and OpenCode"); err != nil {
+		if s.egress() && strings.HasPrefix(s.Telemetry, "http://") {
+			// The gateway refuses plain HTTP; only Claude Code tunnels an http:// endpoint.
+			if err := warn(stderr, "telemetry.endpoint uses http://; through the gateway only Claude Code delivers it, so use https:// for Codex and OpenCode"); err != nil {
 				return "", fmt.Errorf("%s: %w", preserved, err)
 			}
 		}
 		create.Network = e.Network
-		create.Env = append(create.Env, proxyEnv()...)
+		create.Env = append(create.Env, proxyEnv(e.Open)...)
+		create.Mounts = append(create.Mounts, gatewayMount(opts.DataDir))
+	}
+	if adapter != nil && adapter.TokenVariable() != "" {
+		// A legacy terminal starts the agent with the container, so its
+		// credential is chosen now: a placeholder behind a gateway, the token
+		// itself on a network the gateway does not serve.
+		env, files, err := agentToken(opts.DataDir, s.Profile, adapter.Name(), m.Egress != nil)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", preserved, err)
+		}
+		create.Env = append(create.Env, env...)
+		create.EnvFiles = append(create.EnvFiles, files...)
+		create.Command = agent.Invocation{Args: create.Command}.Allow(adapter.TokenVariable()).Args
 	}
 	if s.SSH {
 		mount, err := sshAgentMount()
@@ -544,7 +562,7 @@ func readToken(in io.Reader, stderr io.Writer) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// prepare returns create options and the profile directory. A saved
+// prepare returns create options and the client's secrets directory. A saved
 // long-lived token is passed through a Docker env file, never as an argument.
 func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.CreateOptions, string, error) {
 	if err := ctx.Err(); err != nil {
@@ -610,6 +628,10 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
+	secrets, err := profile.PrepareSecrets(opts.DataDir, adapter.Name(), opts.Profile)
+	if err != nil {
+		return docker.CreateOptions{}, "", err
+	}
 	tools, err := profile.PrepareTools(opts.DataDir)
 	if err != nil {
 		return docker.CreateOptions{}, "", err
@@ -627,8 +649,10 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 			create.Mounts = append(create.Mounts, docker.BindMount{Source: p, Target: "/hewitt/profiles/" + client})
 		}
 	}
-	if variable := adapter.TokenVariable(); variable != "" && operation != "login" {
-		token, err := profile.TokenFile(path)
+	// Status and logout run the native client with the saved token; runs
+	// receive it from RunAgent, as a placeholder behind a gateway.
+	if variable := adapter.TokenVariable(); variable != "" && (operation == "status" || operation == "logout") {
+		token, err := profile.TokenFile(secrets)
 		if err != nil {
 			return docker.CreateOptions{}, "", err
 		}
@@ -640,5 +664,23 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err := create.Validate(); err != nil {
 		return docker.CreateOptions{}, "", err
 	}
-	return create, path, nil
+	return create, secrets, nil
+}
+
+// agentToken returns how a run receives the client's saved long-lived token:
+// behind a gateway, a placeholder the gateway replaces; otherwise the token's
+// env file. Without a saved token the client uses its own login.
+func agentToken(dataDir, profileID, client string, gateway bool) (env, files []string, err error) {
+	secrets, err := profile.PrepareSecrets(dataDir, client, profileID)
+	if err != nil {
+		return nil, nil, err
+	}
+	token, err := profile.TokenFile(secrets)
+	if err != nil || token == "" {
+		return nil, nil, err
+	}
+	if gateway && client == "claude" {
+		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + claudePlaceholder}, nil, nil
+	}
+	return nil, []string{token}, nil
 }

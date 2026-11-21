@@ -38,13 +38,20 @@ do not make separate API credits a prerequisite.
 - `agent`: native Claude Code, Codex, OpenCode, Pi, and Antigravity run/login descriptions (`agent.Names` lists them) and default image
   tags, independent of Cobra.
 - `images`: unified workspace Docker image with on-demand agent installation
-  (`hewitt-agent`), Node/npm, Go, Python/venv, native build tools, and the egress proxy.
+  (`hewitt-agent`), Node/npm, Go, Python/venv, native build tools, and the gateway
+  image, which is the `hewitt` binary built from this source.
   Codex uses Docker as its sandbox; do not enable privileged mode or additional
   capabilities to make its nested namespace sandbox work.
   Keep default GHCR tags aligned with the
   Makefile; images contain no login state.
-- `profile`: private agent-scoped directories for native client state and the
-  shared `<data_dir>/tools` cache; credentials are managed by the native clients.
+- `gateway`: the per-session CONNECT proxy run by `hewitt gateway` in its own
+  container: host policy, suspicious requests that need approval (SRNA) shared
+  with the host through its state directory, and TLS interception only for hosts
+  whose placeholder credentials it replaces. Agents must never receive what it
+  holds; it depends on neither Docker nor Cobra.
+- `profile`: private agent-scoped directories for native client state, the
+  shared `<data_dir>/tools` cache, and `<data_dir>/secrets`, which only gateways
+  mount; credentials are managed by the native clients.
   Agent containers mount the tool cache read-only; only `session`'s installer
   container, with no project or profiles, writes to it.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace

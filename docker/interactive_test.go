@@ -12,7 +12,7 @@ func TestExecInteractiveUsesDirectArguments(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	log := fakeTerminalDocker(t, "exit 0")
 	command := []string{"hewitt-agent", "run", "literal $(touch /tmp/unwanted)"}
-	if err := (Client{}).ExecInteractive(context.Background(), testID, command, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+	if err := (Client{}).ExecInteractive(context.Background(), testID, nil, nil, command, strings.NewReader(""), io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	want := append([]string{"container", "exec", "--interactive", "--env", "TERM=xterm-256color", "--", testID}, command...)

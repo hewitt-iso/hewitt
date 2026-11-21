@@ -1,0 +1,17 @@
+# Image builds see only what they copy; local files such as
+# SECURITY-FINDINGS.local.md, bin/, and .git never enter a build context.
+*
+!go.mod
+!go.sum
+!main.go
+!agent/
+!cmd/
+!config/
+!docker/
+!gateway/
+!profile/
+!session/
+!terminal/
+!workspace/
+!images/
+**/*_test.go

@@ -11,7 +11,7 @@ IMAGE_BUILD_FLAGS ?=
 images: image-hewitt image-egress
 
 image-hewitt:
-	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target hewitt -t hewitt:local -t $(IMAGE_REGISTRY)/hewitt:$(IMAGE_TAG) images
+	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target hewitt -t hewitt:local -t $(IMAGE_REGISTRY)/hewitt:$(IMAGE_TAG) -f images/Dockerfile .
 
 push-images: push-hewitt push-egress
 
@@ -46,4 +46,4 @@ tidy:
 	$(GO) mod tidy
 
 image-egress:
-	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target egress -t hewitt-egress:local -t $(IMAGE_REGISTRY)/egress:$(IMAGE_TAG) images
+	$(DOCKER) build $(IMAGE_BUILD_FLAGS) --target egress -t hewitt-egress:local -t $(IMAGE_REGISTRY)/egress:$(IMAGE_TAG) -f images/Dockerfile .

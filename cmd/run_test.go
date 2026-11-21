@@ -69,11 +69,12 @@ func TestRun(t *testing.T) {
 		customDir  bool
 		blockedDir bool
 	}{
-		{name: "success", wantCalls: "create\nstart\nexec\nexec\nexec\n"},
+		// The gateway container is created and started before the session's.
+		{name: "success", wantCalls: "create\ncreate\nstart\nstart\nexec\nexec\nexec\n"},
 		{name: "create failure", failure: "create", wantError: "create container", wantCalls: "create\n"},
-		{name: "start failure", failure: "start", wantError: "container preserved", wantCalls: "create\nstart\n"},
-		{name: "custom data directory", customDir: true, wantCalls: "create\nstart\nexec\nexec\nexec\n"},
-		{name: "metadata failure", customDir: true, blockedDir: true, wantError: "startup not attempted", wantCalls: "create\n"},
+		{name: "start failure", failure: "start", wantError: "container preserved", wantCalls: "create\ncreate\nstart\n"},
+		{name: "custom data directory", customDir: true, wantCalls: "create\ncreate\nstart\nstart\nexec\nexec\nexec\n"},
+		{name: "metadata failure", customDir: true, blockedDir: true, wantError: "startup not attempted", wantCalls: "create\ncreate\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			runRepository(t)
@@ -115,7 +116,10 @@ func TestRun(t *testing.T) {
 			t.Setenv("HEWITT_TEST_METADATA", filepath.Join(dataDir, "sessions", containerID+".json"))
 			calls := filepath.Join(dir, "calls")
 			t.Setenv("HEWITT_TEST_CALLS", calls)
+			// Network and image calls belong to the gateway and image checks;
+			// container calls are the lifecycle under test.
 			script := `#!/bin/sh
+case "$1" in network) printf 'network-id\n'; exit 0 ;; image) exit 0 ;; esac
 printf '%s\n' "$2" >> "$HEWITT_TEST_CALLS"
 if [ "$2" = start ] && [ ! -f "$HEWITT_TEST_METADATA" ]; then
   printf 'metadata must be saved before start\n' >&2

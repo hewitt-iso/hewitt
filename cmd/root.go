@@ -32,7 +32,8 @@ func NewRootCommand(version string) *cobra.Command {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Help/version/completion bypass configuration loading so they stay
 			// available when configuration is missing or broken.
-			if cmd.Name() == "help" || cmd.Name() == "completion" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion") {
+			// The gateway runs in its container and reads only its own file.
+			if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "gateway" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion") {
 				return nil
 			}
 			loaded, err := config.Load(configPath)
@@ -63,6 +64,7 @@ func NewRootCommand(version string) *cobra.Command {
 	cmd.AddCommand(newShellCommand(&cfg), newAgentCommand("run", &cfg), newAgentCommand("login", &cfg))
 	auth := &cobra.Command{Use: "auth", Short: "Manage native agent authentication", Args: cobra.NoArgs}
 	auth.AddCommand(newAgentCommand("login", &cfg), newAgentCommand("status", &cfg), newAgentCommand("logout", &cfg), newAgentCommand("relogin", &cfg))
-	cmd.AddCommand(auth, newPSCommand(&cfg), newAttachCommand(&cfg), newTrustCommand(&cfg))
+	cmd.AddCommand(auth, newPSCommand(&cfg), newAttachCommand(&cfg), newTrustCommand(&cfg), newGatewayCommand(),
+		newRequestsCommand(&cfg), newDecideCommand(&cfg, true), newDecideCommand(&cfg, false))
 	return cmd
 }

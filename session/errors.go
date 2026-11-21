@@ -15,6 +15,14 @@ func (e *NotFoundError) Error() string      { return fmt.Sprintf("no session nam
 func (*NotFoundError) Hint() string         { return "hewitt ps -a lists saved sessions" }
 func (*NotFoundError) Is(target error) bool { return target == os.ErrNotExist }
 
+// RequestNotFoundError means no session's gateway recorded a request with ID.
+type RequestNotFoundError struct{ ID string }
+
+func (e *RequestNotFoundError) Error() string { return fmt.Sprintf("no request with ID %q", e.ID) }
+func (*RequestNotFoundError) Hint() string {
+	return "hewitt requests -a lists requests of all sessions"
+}
+
 // UntrustedProjectError is a hewitt.yml with sensitive settings that the user
 // has not trusted in its current form. Digest identifies the reviewed contents.
 type UntrustedProjectError struct {

@@ -270,7 +270,7 @@ ssh requires.
 - macOS (Docker Desktop): Docker Desktop's forwarded socket
   `/run/host-services/ssh-auth.sock` is used. It is root-owned in some Docker
   Desktop versions, so a non-root session may get "permission denied".
-- Restricted and hardened sessions refuse `--ssh`: their egress proxy carries
+- Restricted and hardened sessions refuse `--ssh`: their gateway carries
   only tunnels to allowed hosts.
 
 ### Worktree workspace (legacy)
@@ -288,8 +288,9 @@ adapters are `claude`, `codex`, `opencode`, `pi`, and `antigravity`. Other agent
 defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
-are required. Native credentials remain in the private profile directory; do not
-commit it. Login output is not recorded by Docker.
+are required. Native credentials remain in the private profile directory, and
+Claude's long-lived token in `<data_dir>/secrets`, which only the gateway reads
+(see Gateway, credentials, and approvals); do not commit either. Login output is not recorded by Docker.
 
 Sessions may share a profile. Codex refreshes its own tokens in the shared
 `auth.json` and reloads it when another session has already refreshed; if two
@@ -389,7 +390,7 @@ mounts:
 rules: .hewitt/claude            # default: .hewitt/<agent> if present
 isolation: restricted            # shared | isolated (default) | restricted | hardened
 rootfs: ro                       # ro | rw
-network: agents-net              # restricted/hardened default: Hewitt egress proxy
+network: agents-net              # default: a per-session network with the Hewitt gateway
 runtime: runsc                   # required for hardened
 limits:                          # applied only when set
   memory: 4g
@@ -420,13 +421,45 @@ non-proxy network, symlinked mount sources) is refused unless the matching
 `danger` item (or `--danger`) is given. `exec` mode accepts only `agent`,
 `mode`, `target`, `workdir`, `isolation: shared`, and `danger`.
 
-The egress proxy of restricted and hardened sessions passes only `CONNECT`
-tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
-unless an entry names another port (`host:port`). A port opens for that host
-only, and `run` warns about each such entry because its traffic need not be
-HTTPS. Plain HTTP requests through the proxy are refused, so clients must use
-HTTPS or tunnel through the proxy, as Claude Code's OpenTelemetry exporter does
-for an `http://` endpoint.
+### Gateway, credentials, and approvals
+
+Every session in `new` mode on the default network gets a Hewitt gateway: a
+separate container (`ghcr.io/hewitt-iso/egress`) on a per-session network that
+agents reach as their HTTPS proxy. Agents cannot read its configuration,
+state, or credentials.
+
+- **Credential injection.** `hewitt login claude` saves the long-lived token in
+  `<data_dir>/secrets/claude/<profile>/`, which only the gateway mounts. Claude
+  receives the placeholder `sk-ant-oat01-hewitt-gateway-managed`; the gateway
+  terminates TLS for `api.anthropic.com` only, with a certificate from a CA in
+  `<data_dir>/gateway-ca` that agent containers trust through
+  `NODE_EXTRA_CA_CERTS`, and replaces the placeholder with the token. Other
+  hosts are tunneled unread. A token saved in a profile by an earlier version
+  moves to `secrets/` on the next run. A new login applies without restarting
+  the gateway. Sessions on a custom `network` have no gateway and receive the
+  token itself, as before. Codex, OpenCode, Pi, and Antigravity keep their
+  logins in their profiles.
+- **Open and restricted gateways.** `shared` and `isolated` sessions pass every
+  HTTPS host; their network reaches the outside, so plain HTTP goes direct.
+  `restricted` and `hardened` sessions have an internal network and pass only
+  tunnels to the agent's provider hosts and `egress.allow` entries, on port 443
+  unless an entry names another port (`host:port`). A port opens for that host
+  only, and `run` warns about each such entry because its traffic need not be
+  HTTPS. Plain HTTP requests through a restricted gateway are refused, so
+  clients must use HTTPS or tunnel through the proxy, as Claude Code's
+  OpenTelemetry exporter does for an `http://` endpoint.
+- **Suspicious requests need approval (SRNA).** A restricted gateway holds a
+  connection to any other host for about a minute instead of refusing it.
+  `hewitt ps` shows such sessions as `SRNA (n)`; `hewitt requests` lists the
+  requests, and `hewitt approve <request>` or `hewitt deny <request>` decides.
+  A waiting connection proceeds or fails at once; an agent that retries later
+  proceeds once approved. Decisions apply to later connections to the same
+  host and port, and the gateway logs every decision (`docker logs`).
+
+An allowlist does not stop deliberate exfiltration through an allowed host:
+an agent that can reach `github.com` can push data to any repository there.
+The gateway keeps credentials out of agents and makes unexpected destinations
+visible; it is not a data-loss filter.
 
 ## OpenTelemetry
 
@@ -439,7 +472,7 @@ telemetry:
   endpoint: https://otel.example.com:4318   # scheme://host[:port]; no path or credentials
 ```
 
-| Agent | Exports | Configured by Hewitt as | Through the egress proxy |
+| Agent | Exports | Configured by Hewitt as | Through a restricted gateway |
 |---|---|---|---|
 | Claude Code | logs, metrics | `CLAUDE_CODE_ENABLE_TELEMETRY` and `OTEL_*` variables | `http://` and `https://` |
 | Codex | logs, traces | `-c otel.exporter` and `otel.trace_exporter` overrides | `https://` only |
@@ -458,14 +491,15 @@ before login; Claude Code records prompt text only with `OTEL_LOG_USER_PROMPTS=1
 
 The endpoint must be reachable from the container:
 
-- `shared` and `isolated` sessions use Docker's default bridge network.
-  `localhost` is the container itself. Docker Desktop resolves
+- `shared` and `isolated` sessions use their gateway's network, which reaches
+  the outside directly; HTTPS goes through the gateway, which resolves names
+  from Docker's default network. `localhost` is the container itself. Docker Desktop resolves
   `host.docker.internal` to the host; Linux does not, and a host firewall such
   as ufw usually drops traffic from `docker0`. Prefer a collector reachable by
   DNS name, or allow the bridge in the host firewall and listen on the bridge
   address (usually `172.17.0.1`), not `127.0.0.1`.
 - `restricted` and `hardened` sessions reach the collector only through the
-  egress proxy, and `run` adds the endpoint's host and port to its allowlist.
+  gateway, and `run` adds the endpoint's host and port to its allowlist.
   The proxy refuses plain HTTP, and Codex and OpenCode send plain HTTP to an
   `http://` endpoint, so use `https://`; `run` warns otherwise, and warns that a
   port other than 443 is not limited to HTTPS. OpenCode's trace exporter
@@ -501,7 +535,8 @@ pull the pinned base images and disable Docker's build cache, so they pick up
 Debian package updates.
 
 Each run rebuilds the workspace image (`ghcr.io/hewitt-iso/hewitt`) and the
-egress proxy image (`ghcr.io/hewitt-iso/egress`), checks the CLI under an
+gateway image (`ghcr.io/hewitt-iso/egress`, the `hewitt` binary built from
+this source), checks the CLI under an
 arbitrary UID/GID, tests the container and tmux lifecycle, and publishes both
 tested images as `:latest` using the workflow's `GITHUB_TOKEN`. Failed checks
 prevent publishing, leaving the previously published tags available. Runs are

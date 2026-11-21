@@ -9,9 +9,10 @@ import (
 	"strings"
 )
 
-// ExecInteractive starts a fresh process in a running workspace. It does not
-// start a terminal server or change the container's lifecycle.
-func (Client) ExecInteractive(ctx context.Context, id string, command []string, in io.Reader, out, stderr io.Writer) error {
+// ExecInteractive starts a fresh process in a running workspace with extra
+// environment entries and env files. It does not start a terminal server or
+// change the container's lifecycle.
+func (Client) ExecInteractive(ctx context.Context, id string, env, envFiles, command []string, in io.Reader, out, stderr io.Writer) error {
 	if err := validateArgument("container ID", id); err != nil {
 		return err
 	}
@@ -27,7 +28,16 @@ func (Client) ExecInteractive(ctx context.Context, id string, command []string, 
 	if terminal == "" || terminal == "dumb" {
 		terminal = "xterm-256color"
 	}
+	if err := validateEnv(env, envFiles); err != nil {
+		return err
+	}
 	args := []string{"container", "exec", "--interactive", "--env", "TERM=" + terminal}
+	for _, file := range envFiles {
+		args = append(args, "--env-file", file)
+	}
+	for _, entry := range env {
+		args = append(args, "--env", entry)
+	}
 	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		args = append(args, "--tty")
 	}

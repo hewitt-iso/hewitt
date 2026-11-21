@@ -84,21 +84,8 @@ func (opts CreateOptions) Validate() error {
 	if opts.Workdir != "" && (!strings.HasPrefix(opts.Workdir, "/") || strings.ContainsAny(opts.Workdir, "\x00\r\n")) {
 		return fmt.Errorf("container workdir must be an absolute path")
 	}
-	for _, env := range opts.Env {
-		key, _, ok := strings.Cut(env, "=")
-		if !ok || key == "" || strings.ContainsAny(env, "\x00\r\n") {
-			return fmt.Errorf("container environment must contain explicit KEY=value entries")
-		}
-		for i, c := range key {
-			if !(c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9') {
-				return fmt.Errorf("invalid container environment key")
-			}
-		}
-	}
-	for _, file := range opts.EnvFiles {
-		if !filepath.IsAbs(file) || strings.ContainsAny(file, "\x00\r\n") {
-			return fmt.Errorf("container env file must be an absolute path")
-		}
+	if err := validateEnv(opts.Env, opts.EnvFiles); err != nil {
+		return err
 	}
 	for _, mount := range opts.Mounts {
 		if !filepath.IsAbs(mount.Source) || !strings.HasPrefix(mount.Target, "/") || strings.ContainsAny(mount.Source+mount.Target, ",\x00\r\n") {
@@ -121,6 +108,27 @@ func (opts CreateOptions) Validate() error {
 	for _, arg := range opts.Command {
 		if strings.ContainsRune(arg, 0) {
 			return fmt.Errorf("container command contains NUL")
+		}
+	}
+	return nil
+}
+
+// validateEnv checks explicit KEY=value entries and absolute env file paths.
+func validateEnv(env, files []string) error {
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || strings.ContainsAny(entry, "\x00\r\n") {
+			return fmt.Errorf("container environment must contain explicit KEY=value entries")
+		}
+		for i, c := range key {
+			if !(c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9') {
+				return fmt.Errorf("invalid container environment key")
+			}
+		}
+	}
+	for _, file := range files {
+		if !filepath.IsAbs(file) || strings.ContainsAny(file, "\x00\r\n") {
+			return fmt.Errorf("container env file must be an absolute path")
 		}
 	}
 	return nil
