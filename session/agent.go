@@ -38,6 +38,10 @@ type AgentOptions struct {
 	// Separate creates another workspace container instead of reusing one.
 	Separate bool
 	Shell    bool
+	// Prompt is a task passed to the agent as its initial prompt; Headless
+	// runs it in the agent's non-interactive mode and prints its output.
+	Prompt   string
+	Headless bool
 }
 
 // RunAgent prepares a shared workspace container for volume runs, or starts a
@@ -70,8 +74,8 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 			return "", err
 		}
 	}
-	if (opts.Shell || opts.Separate) && (s.Mode != "new" || s.Workspace != "volume") {
-		return "", fmt.Errorf("shell and --separate require the managed volume workspace in new mode")
+	if (opts.Shell || opts.Separate || opts.Prompt != "") && (s.Mode != "new" || s.Workspace != "volume") {
+		return "", fmt.Errorf("shell, --separate, and tasks (-p) require the managed volume workspace in new mode")
 	}
 	key := ""
 	if s.Mode == "new" && s.Workspace == "volume" {

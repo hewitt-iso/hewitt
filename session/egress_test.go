@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"strings"
 	"testing"
@@ -71,5 +72,40 @@ func TestClaudeReceivesPlaceholderBehindGateway(t *testing.T) {
 	// The workspace exec and the legacy container each get the placeholder.
 	if placeholders != 2 {
 		t.Fatalf("placeholders = %d", placeholders)
+	}
+}
+
+func TestTaskReachesAgentLaunch(t *testing.T) {
+	runRepository(t)
+	log := fakeToolsDocker(t)
+	data := t.TempDir()
+	installTool(t, data, "codex")
+	ctx := context.Background()
+	task := "fix the failing test\nthen run 'go test ./...' -v"
+	opts := AgentOptions{Agent: "codex", Image: "agent:test", DataDir: data, Prompt: task, Headless: true}
+	id, err := RunAgent(ctx, opts, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := NewStore(data)
+	var stderr strings.Builder
+	if err := OpenWorkspace(ctx, store, id, opts, strings.NewReader("ignored"), io.Discard, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var exec string
+	for _, call := range calls(t, log) {
+		if strings.HasPrefix(call, "container exec ") {
+			exec = call
+		}
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(task))
+	if !strings.Contains(exec, "--env HEWITT_PROMPT_B64="+encoded) || !strings.Contains(exec, "--env HEWITT_HEADLESS=1") || strings.Contains(exec, "--tty") {
+		t.Fatalf("exec = %s", exec)
+	}
+	if strings.Contains(exec, "fix the failing test") {
+		t.Fatalf("task passed in clear text: %s", exec)
+	}
+	if !strings.Contains(stderr.String(), "codex finished in workspace") || !strings.Contains(stderr.String(), "hewitt sync") {
+		t.Fatalf("headless summary = %q", stderr.String())
 	}
 }

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,9 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
 	"github.com/hewitt-iso/hewitt/workspace"
 )
@@ -181,6 +185,9 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if choice != "workspace" {
 		command = append(command, choice)
 	}
+	if opts.Prompt != "" && !slices.Contains(agent.TaskAgents, choice) {
+		return fmt.Errorf("%s does not accept a task yet (tasks work with %s); start it without -p", choice, strings.Join(agent.TaskAgents, ", "))
+	}
 	if choice != "workspace" && choice != "shell" {
 		// The workspace mounts the tool cache read-only; install before exec.
 		if err := ensureTool(ctx, opts.DataDir, m.Image, choice, stderr); err != nil {
@@ -212,6 +219,13 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 		}
 		env, files = append(env, token...), tokenFiles
 	}
+	if opts.Prompt != "" {
+		env = append(env, "HEWITT_PROMPT_B64="+base64.StdEncoding.EncodeToString([]byte(opts.Prompt)))
+		if opts.Headless {
+			// Without a terminal the agent prints its result and exits.
+			env, in = append(env, "HEWITT_HEADLESS=1"), strings.NewReader("")
+		}
+	}
 	// Requests of this launch appear where its agent waits for them.
 	watch, stopWatch := context.WithCancel(ctx)
 	go watchRequests(watch, store, m, run, stderr)
@@ -220,6 +234,10 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	var exit *exec.ExitError
 	if ctx.Err() == nil && errors.As(err, &exit) {
 		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}
+	}
+	if err == nil && opts.Headless {
+		_, werr := fmt.Fprintf(stderr, "[hewitt] %s finished in workspace %s; hewitt sync %s imports its branch\n", choice, m.Name, m.Name)
+		return werr
 	}
 	if err == nil || errors.Is(err, errInterrupted) {
 		_, werr := fmt.Fprintf(stderr, "[hewitt] %s exited; workspace %s keeps running (hewitt run opens another agent, hewitt stop %s stops it)\n", choice, m.Name, m.Name)

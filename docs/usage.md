@@ -246,6 +246,38 @@ ssh requires.
 - Restricted and hardened sessions refuse `--ssh`: their gateway carries
   only tunnels to allowed hosts.
 
+## Tasks and headless runs
+
+`-p` (`--prompt`) gives the agent its task as its initial prompt; `--prompt-file`
+reads a longer task from a file, or from standard input with `-`:
+
+```sh
+hewitt run claude -p "fix the flaky test in api/"
+hewitt run opencode --prompt-file tasks/refactor.md
+git diff main | hewitt run codex --headless --prompt-file -
+```
+
+The task opens the agent's interface as usual, already working on it.
+`--headless` runs it in the agent's non-interactive mode instead: no
+interface and no terminal, the agent's output on stdout, progress and the
+branch name on stderr, and a nonzero exit status if the agent fails. When it
+finishes, `hewitt sync` imports its branch.
+
+| Agent | With `-p` | With `--headless` |
+|---|---|---|
+| Claude Code | `claude -- <task>` | `claude -p --permission-mode bypassPermissions -- <task>` |
+| Codex | `codex ... -- <task>` | `codex exec --dangerously-bypass-approvals-and-sandbox ... -- <task>` |
+| OpenCode | `opencode --prompt=<task>` | `opencode run -- <task>` |
+| Pi | `pi -- <task>` | `pi -p -- <task>` |
+
+Antigravity does not accept a task yet. A headless agent cannot ask for
+permission, so its own permission prompts are off: the container, the gateway,
+and the observer are its boundary, and suspicious requests still wait for your
+approval (in tmux, as a popup in the pane that started the run). Tasks need
+the default volume workspace. A task reaches the container base64-encoded in
+the launch's environment, never on a command line, and is limited to 96 KiB;
+put longer material in a file in the repository and refer to it.
+
 ## List sessions
 
 ```sh

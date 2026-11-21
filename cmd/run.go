@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/config"
@@ -18,6 +20,8 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	var danger []string
 	var ssh bool
 	var detach, separate bool
+	var prompt, promptFile string
+	var headless bool
 	short := "Start an agent container with a persistent native profile"
 	exampleAction := action
 	switch action {
@@ -59,7 +63,20 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 			}
 			opts.Separate, opts.Shell = separate, cmd.Name() == "shell"
 			opts.File, opts.Mode, opts.Target, opts.Workspace, opts.Isolation, opts.Danger, opts.SSH = file, mode, target, workspace, isolation, danger, ssh
-			if isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
+			task, err := readTask(prompt, promptFile)
+			if err != nil {
+				return err
+			}
+			switch {
+			case headless && task == "":
+				return fmt.Errorf("--headless needs a task: -p or --prompt-file")
+			case headless && opts.Agent == "":
+				return fmt.Errorf("--headless needs an agent: hewitt run <agent> --headless -p ...")
+			case task != "" && (detach || opts.Shell):
+				return fmt.Errorf("a task needs an agent to run it; it cannot be combined with --detach or a shell")
+			}
+			opts.Prompt, opts.Headless = task, headless
+			if !headless && isInteractive(cmd) && !profile.IsOnboarded(cfg.DataDir) {
 				start, err := runOnboarding(cmd, cfg, &opts)
 				if err != nil {
 					return err
@@ -82,6 +99,8 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	cmd.Args = cobra.MatchAll(cobra.MaximumNArgs(1), validAgent)
 	cmd.Use = "run [agent]"
 	cmd.Example = "  hewitt run                       # select an agent, then prepare the workspace\n" +
+		"  hewitt run claude -p \"fix the failing test in api/\"\n" +
+		"  hewitt run codex --headless --prompt-file task.md\n" +
 		"  hewitt run codex --profile personal\n" +
 		"  hewitt run claude --mode exec --target py-agent\n" +
 		"  hewitt run claude --isolation restricted --workspace copy"
@@ -97,6 +116,11 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&workspace, "workspace", "", "workspace: volume, worktree, direct, or copy (default volume)")
 	cmd.Flags().StringVar(&isolation, "isolation", "", "isolation level: shared, isolated, restricted, or hardened")
 	cmd.Flags().BoolVar(&ssh, "ssh", false, "forward the host ssh-agent so the agent can push over SSH")
+	if cmd.Name() == "run" {
+		cmd.Flags().StringVarP(&prompt, "prompt", "p", "", "task for the agent, passed as its initial prompt")
+		cmd.Flags().StringVar(&promptFile, "prompt-file", "", "read the task from a file (- reads standard input)")
+		cmd.Flags().BoolVar(&headless, "headless", false, "run the task without the agent's interface, print its output, and exit; the agent cannot ask for permissions")
+	}
 	cmd.Flags().StringSliceVar(&danger, "danger", nil, "explicitly allow weakening: network, host-paths, writable-root, symlinks")
 	return cmd
 }
@@ -124,6 +148,9 @@ func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOption
 			return err
 		}
 		if choice == "shell" {
+			if opts.Prompt != "" {
+				return fmt.Errorf("a task needs an agent to run it; select an agent, not the shell")
+			}
 			opts.Shell = true
 		} else {
 			opts.Agent = choice
@@ -184,4 +211,35 @@ func newShellCommand(cfg *config.Config) *cobra.Command {
 	cmd.Args = cobra.NoArgs
 	cmd.ValidArgs = nil
 	return cmd
+}
+
+// maxTask keeps an encoded task within one environment entry's kernel limit.
+const maxTask = 96 << 10
+
+// readTask returns the task from -p or --prompt-file ("-" is standard input).
+func readTask(prompt, file string) (string, error) {
+	if prompt != "" && file != "" {
+		return "", fmt.Errorf("use either -p or --prompt-file, not both")
+	}
+	if file != "" {
+		var data []byte
+		var err error
+		if file == "-" {
+			data, err = io.ReadAll(io.LimitReader(os.Stdin, maxTask+1))
+		} else {
+			data, err = os.ReadFile(file)
+		}
+		if err != nil {
+			return "", fmt.Errorf("read task: %w", err)
+		}
+		prompt = string(data)
+	}
+	prompt = strings.TrimSpace(prompt)
+	if len(prompt) > maxTask {
+		return "", fmt.Errorf("task is longer than %d KiB; put the details in a file in the repository and refer to it", maxTask>>10)
+	}
+	if strings.ContainsRune(prompt, 0) {
+		return "", fmt.Errorf("task contains a NUL byte")
+	}
+	return prompt, nil
 }

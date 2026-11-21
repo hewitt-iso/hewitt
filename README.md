@@ -93,6 +93,14 @@ hewitt sync                  # import their branches into your repository
 git branch --list 'hewitt/*'
 ```
 
+Give an agent its task up front, or run it without its interface and collect
+the result:
+
+```sh
+hewitt run claude -p "fix the flaky test in api/"
+hewitt run codex --headless --prompt-file task.md   # prints the result, exits
+```
+
 The first run offers a short setup: import your agent settings (with secret
 values removed), choose a workspace, and log in. Run agents inside **tmux** to
 keep them reattachable and to answer requests in their panes.
@@ -175,6 +183,7 @@ set -g status-interval 5
 |---|---|
 | `hewitt` | Pick an agent or a shell and open it in the project's workspace |
 | `hewitt run <agent>` | Open a specific agent: `claude`, `codex`, `opencode`, `pi`, `antigravity` |
+| `hewitt run <agent> -p "<task>"` | Start the agent on a task; add `--headless` to run it without its interface |
 | `hewitt shell` | Open a shell in the workspace |
 | `hewitt ps` | List workspaces, their agents, and pending requests |
 | `hewitt attach` | Return to a running agent's tmux pane |
