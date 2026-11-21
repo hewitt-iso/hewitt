@@ -45,6 +45,8 @@ do not make separate API credits a prerequisite.
   Makefile; images contain no login state.
 - `profile`: private agent-scoped directories for native client state and the
   shared `<data_dir>/tools` cache; credentials are managed by the native clients.
+  Agent containers mount the tool cache read-only; only `session`'s installer
+  container, with no project or profiles, writes to it.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace
   boundary. Agent adapters describe agent-specific execution; authentication
   handles credential lifecycles separately. Neither should depend on Cobra.

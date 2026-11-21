@@ -166,6 +166,9 @@ func (c Client) Run(ctx context.Context, opts CreateOptions, stdout io.Writer) e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("%w: %w", ErrCLIMissing, err)
+		}
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
 			return fmt.Errorf("run helper container: %w: %s", err, detail)
 		}

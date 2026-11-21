@@ -104,6 +104,14 @@ func TestRun(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// An installed agent needs no installer container.
+			bin := filepath.Join(dataDir, "tools", "bin")
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "codex"), nil, 0o700); err != nil {
+				t.Fatal(err)
+			}
 			t.Setenv("HEWITT_TEST_METADATA", filepath.Join(dataDir, "sessions", containerID+".json"))
 			calls := filepath.Join(dir, "calls")
 			t.Setenv("HEWITT_TEST_CALLS", calls)

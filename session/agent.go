@@ -151,6 +151,12 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", err
 	}
+	if s.Agent != "workspace" {
+		// Legacy terminals start the agent at once; install it before creating anything.
+		if err := ensureTool(ctx, opts.DataDir, create.Image, s.Agent, stderr); err != nil {
+			return "", err
+		}
+	}
 	s.apply(&create)
 	if envFile != "" {
 		create.EnvFiles = append(create.EnvFiles, envFile)
@@ -482,6 +488,9 @@ func runAuthentication(ctx context.Context, opts AgentOptions, adapter agent.Ada
 	if err != nil {
 		return err
 	}
+	if err := ensureTool(ctx, opts.DataDir, create.Image, opts.Agent, stderr); err != nil {
+		return err
+	}
 	store, err := NewStore(opts.DataDir)
 	if err != nil {
 		return err
@@ -558,7 +567,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 		if err != nil {
 			return docker.CreateOptions{}, "", err
 		}
-		create.Mounts = []docker.BindMount{{Source: tools, Target: "/hewitt/tools"}}
+		create.Mounts = []docker.BindMount{{Source: tools, Target: toolsPath, ReadOnly: true}}
 		for _, client := range agent.Names {
 			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
 			if err != nil {
@@ -607,7 +616,7 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	}
 	create.Mounts = []docker.BindMount{
 		{Source: path, Target: agent.ProfilePath},
-		{Source: tools, Target: "/hewitt/tools"},
+		{Source: tools, Target: toolsPath, ReadOnly: true},
 	}
 	if operation == "run" {
 		for _, client := range agent.Names {

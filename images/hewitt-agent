@@ -32,18 +32,36 @@ agent_binary() {
 	esac
 }
 
+# publish atomically replaces an executable in BIN_DIR. Running agents keep
+# their open file; new runs use the replacement. Hewitt checks for the final
+# name to decide that an installation is complete, so it is moved last.
+publish() {
+	local name="$1" source="$2" tmp
+	tmp="$BIN_DIR/.$name.$$"
+	cp -L "$source" "$tmp"
+	chmod 0755 "$tmp"
+	mv -f "$tmp" "$BIN_DIR/$name"
+}
+
 ensure_agent() {
 	local agent
 	agent="$(agent_binary "$1")"
-	mkdir -p "$BIN_DIR"
 	if [ -x "$BIN_DIR/$agent" ]; then
 		return 0
 	fi
-	if [ -x "$TOOLS_DIR/$agent/node_modules/.bin/$agent" ]; then
-		ln -sf "$TOOLS_DIR/$agent/node_modules/.bin/$agent" "$BIN_DIR/$agent"
+	if command -v "$agent" >/dev/null 2>&1; then
 		return 0
 	fi
-	if command -v "$agent" >/dev/null 2>&1; then
+	# Agent containers mount the tool cache read-only; Hewitt installs agents
+	# from the host in a separate installer container before launching them.
+	if [ ! -w "$TOOLS_DIR" ]; then
+		printf '%s is not installed in the read-only tool cache; run hewitt run %s on the host to install it\n' "$1" "$1" >&2
+		return 1
+	fi
+	mkdir -p "$BIN_DIR"
+	if [ -x "$TOOLS_DIR/$agent/node_modules/.bin/$agent" ]; then
+		ln -sfn "$TOOLS_DIR/$agent/node_modules/.bin/$agent" "$BIN_DIR/.$agent.$$"
+		mv -f "$BIN_DIR/.$agent.$$" "$BIN_DIR/$agent"
 		return 0
 	fi
 	printf 'Installing %s...\n' "$agent" >&2
@@ -54,30 +72,34 @@ ensure_agent() {
 		tmp="$(mktemp -d)"
 		curl -fsSL https://claude.ai/install.sh -o "$tmp/install-claude.sh"
 		HOME="$tmp" bash "$tmp/install-claude.sh" "$version" >&2
-		cp -L "$tmp/.local/bin/claude" "$BIN_DIR/claude"
-		chmod 0755 "$BIN_DIR/claude"
+		publish claude "$tmp/.local/bin/claude"
 		rm -rf "$tmp"
 		;;
 	codex)
 		local version="${CODEX_VERSION:-latest}"
 		npm install --prefix "$TOOLS_DIR/codex" "@openai/codex@$version" >&2
-		ln -sf "$TOOLS_DIR/codex/node_modules/.bin/codex" "$BIN_DIR/codex"
+		ln -sfn "$TOOLS_DIR/codex/node_modules/.bin/codex" "$BIN_DIR/.codex.$$"
+		mv -f "$BIN_DIR/.codex.$$" "$BIN_DIR/codex"
 		;;
 	opencode)
 		local version="${OPENCODE_VERSION:-latest}"
 		npm install --prefix "$TOOLS_DIR/opencode" "opencode-ai@$version" >&2
-		ln -sf "$TOOLS_DIR/opencode/node_modules/.bin/opencode" "$BIN_DIR/opencode"
+		ln -sfn "$TOOLS_DIR/opencode/node_modules/.bin/opencode" "$BIN_DIR/.opencode.$$"
+		mv -f "$BIN_DIR/.opencode.$$" "$BIN_DIR/opencode"
 		;;
 	pi)
 		local version="${PI_VERSION:-latest}"
 		npm install --prefix "$TOOLS_DIR/pi" --ignore-scripts "@earendil-works/pi-coding-agent@$version" >&2
-		ln -sf "$TOOLS_DIR/pi/node_modules/.bin/pi" "$BIN_DIR/pi"
+		ln -sfn "$TOOLS_DIR/pi/node_modules/.bin/pi" "$BIN_DIR/.pi.$$"
+		mv -f "$BIN_DIR/.pi.$$" "$BIN_DIR/pi"
 		;;
 	agy)
 		local tmp
 		tmp="$(mktemp -d)"
 		curl -fsSL https://antigravity.google/cli/install.sh -o "$tmp/install-agy.sh"
-		HOME="$tmp" bash "$tmp/install-agy.sh" --dir "$BIN_DIR" >&2
+		mkdir "$tmp/bin"
+		HOME="$tmp" bash "$tmp/install-agy.sh" --dir "$tmp/bin" >&2
+		publish agy "$tmp/bin/agy"
 		rm -rf "$tmp"
 		;;
 	*)
@@ -491,6 +513,10 @@ load_tmux_conf() {
 cmd="${1:-}"
 if [ "${HEWITT_HOST_TERMINAL:-}" != "1" ]; then load_tmux_conf; fi
 case "$cmd" in
+install)
+	# Hewitt's installer container: the only writer of the tool cache.
+	ensure_agent "$2" 2>&1
+	;;
 ensure)
 	shift
 	agent="$1"

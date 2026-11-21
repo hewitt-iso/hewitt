@@ -95,8 +95,23 @@ make image-hewitt
 ```
 
 Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand
-into `<data_dir>/tools` (mounted at `/hewitt/tools`). Start each agent in its own
-host terminal tab or tmux window:
+into the shared tool cache `<data_dir>/tools`. Agent and login containers mount
+it read-only at `/hewitt/tools`, so a session cannot replace executables that
+later sessions of any project run. Before launching an agent that is missing
+from the cache, `run`, `login`, and `auth` install it in a short-lived installer
+container that mounts only the tool cache: no project, profiles, env file, or
+credentials. It uses Docker's default network, also for restricted and hardened
+sessions, and is removed when it exits. Installations are serialized by a lock
+held only while one runs; agents already in the cache start in parallel without
+it. The installer moves each executable into place last, so running agents keep
+their binary and later runs use the new one. The workspace container keeps
+running during installation. An agent chosen inside a container, such as from
+a legacy tmux window's picker, must already be in the cache; otherwise
+`hewitt-agent` names the `hewitt run <agent>` command that installs it. Images
+without `hewitt-agent install` cannot install agents; the default image is
+refreshed automatically.
+
+Start each agent in its own host terminal tab or tmux window:
 
 ```sh
 hewitt                    # select Codex in host window 1

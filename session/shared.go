@@ -178,6 +178,12 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if choice != "workspace" {
 		command = append(command, choice)
 	}
+	if choice != "workspace" && choice != "shell" {
+		// The workspace mounts the tool cache read-only; install before exec.
+		if err := ensureTool(ctx, opts.DataDir, m.Image, choice, stderr); err != nil {
+			return err
+		}
+	}
 	run, release, err := store.RecordRun(m, choice)
 	if err != nil {
 		return fmt.Errorf("track agent connection: %w", err)
