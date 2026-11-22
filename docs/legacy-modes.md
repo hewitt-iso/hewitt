@@ -12,8 +12,9 @@ directory, so an agent can make the host run code. It therefore requires
 
 `--image` overrides the default image; `image` in `hewitt.yml` takes precedence
 over the default for run sessions.
-`--name` optionally names the Docker container. Implemented
-adapters are `claude`, `codex`, `opencode`, `pi`, and `antigravity`. Other agents fail explicitly. `--profile`
+`--name` optionally names the Docker container. Built-in
+agents are `claude`, `codex`, `opencode`, `pi`, and `antigravity`; [agent
+manifests](agents.md) add others. Unknown agents fail explicitly. `--profile`
 defaults to `default` and selects an agent-scoped directory under
 `<data_dir>/profiles`. Login uses the official native subscription flow; Codex
 uses device authentication and a file credential store. No separate API credits
@@ -47,7 +48,7 @@ Images set `LANG=C.UTF-8` so non-ASCII input such as Cyrillic works.
 Default volume `run` saves workspace metadata before startup and keeps the
 container alive with an idle foreground process. Each connection uses
 `docker exec --interactive` (with a TTY when stdin is a terminal) to launch
-`hewitt-agent run`. No tmux server is started. Profile and isolation settings
+Hewitt's own `hewitt-agent` (see [Agents](agents.md#images)). No tmux server is started. Profile and isolation settings
 belong to the workspace; processes in one container share its security boundary.
 Use `--separate` or distinct names for separate container isolation.
 

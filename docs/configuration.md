@@ -104,8 +104,8 @@ The endpoint must be reachable from the container:
   Docker's default network; names that exist only inside another Docker network
   do not work.
 
-Codex support comes from `hewitt-agent` in the workspace image and needs an
-image that includes it. `exec` mode refuses `telemetry`, since the external
+Codex receives its exporters as `-c` arguments from its
+[manifest](agents.md)'s `telemetry` field. `exec` mode refuses `telemetry`, since the external
 container's own configuration applies.
 
 ## User configuration (config.json)

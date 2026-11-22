@@ -31,6 +31,12 @@ type Metadata struct {
 	Copy         *workspace.Copy     `json:"copy,omitempty"`
 	Volume       *workspace.Volume   `json:"volume,omitempty"`
 	Egress       *Egress             `json:"egress,omitempty"`
+	// Agents are the agents whose profiles a host-terminal workspace mounts.
+	// Records written before manifests leave it empty: the built-in agents.
+	Agents []string `json:"agents,omitempty"`
+	// MountsAgent reports that the container mounts Hewitt's hewitt-agent
+	// directory; older workspace containers run the image's own copy.
+	MountsAgent bool `json:"mounts_agent,omitempty"`
 	// Mode is empty for sessions created before launch modes existed (new).
 	// Container is the external target of exec and sidecar sessions; exec
 	// sessions use a random ID and their own terminal Socket.
@@ -340,6 +346,11 @@ func (m Metadata) validate() error {
 	if err := validateAgent(m.Agent); err != nil {
 		return err
 	}
+	for _, name := range m.Agents {
+		if !agent.ValidName(name) {
+			return fmt.Errorf("unsupported workspace agent")
+		}
+	}
 	if m.Image == "" && m.Mode != "exec" {
 		return fmt.Errorf("session image must not be empty")
 	}
@@ -358,9 +369,21 @@ func (m Metadata) validate() error {
 
 func validateAgent(name string) error {
 	switch {
-	case name == "workspace", slices.Contains(agent.Names, name):
+	case name == "workspace", agent.ValidName(name):
 		return nil
 	default:
 		return fmt.Errorf("unsupported session agent")
 	}
+}
+
+// WorkspaceAgents lists the agents whose profiles workspace m mounts.
+func (m Metadata) WorkspaceAgents() []string {
+	if m.Agents != nil {
+		return m.Agents
+	}
+	var names []string
+	for _, a := range agent.Builtin() {
+		names = append(names, a.Name)
+	}
+	return names
 }

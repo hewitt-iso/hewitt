@@ -1,0 +1,35 @@
+# Google's agy CLI keeps its login in the Secret Service keyring, so it runs
+# in a private D-Bus session with gnome-keyring whose keyring file lives in
+# the profile's XDG_DATA_HOME. Plain agy opens its sign-in menu when the
+# profile has no login.
+version: 1
+name: antigravity
+binary: agy
+install:
+  script: https://antigravity.google/cli/install.sh
+  args: [--dir, "{tmp}/bin"]
+  output: bin/agy
+wrap: keyring
+unset_env:
+  - GEMINI_API_KEY
+  - GOOGLE_API_KEY
+  - ANTIGRAVITY_API_KEY
+  - GOOGLE_APPLICATION_CREDENTIALS
+  - DBUS_SESSION_BUS_ADDRESS
+commands:
+  run: []
+  login: []
+  status: [models]
+  logout: {slash: /logout}
+config_dir: "{profile}/home/.gemini"
+instructions: "{profile}/home/.gemini/GEMINI.md"
+hosts:
+  - accounts.google.com
+  - oauth2.googleapis.com
+  - www.googleapis.com
+  - cloudcode-pa.googleapis.com
+  - daily-cloudcode-pa.googleapis.com
+  - generativelanguage.googleapis.com
+  - antigravity.google
+  - antigravity-cli-auto-updater-974169037036.us-central1.run.app
+herdr: agy

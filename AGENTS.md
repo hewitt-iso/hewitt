@@ -37,10 +37,18 @@ do not make separate API credits a prerequisite.
   `hewitt/<name>/*`; legacy worktree creation and safe removal that refuses
   uncommitted, untracked, or ignored files and retains branches. Host Git must
   never open a session's container-owned repository.
-- `agent`: native Claude Code, Codex, OpenCode, Pi, and Antigravity run/login descriptions (`agent.Names` lists them) and default image
-  tags, independent of Cobra.
+- `agent`: agent manifests, independent of Cobra: the built-in Claude Code,
+  Codex, OpenCode, Pi, and Antigravity in `agent/manifests`, compiled in, and
+  the user's own in `<data_dir>/agents`, which add or replace agents. A
+  manifest describes installation, run/login/status/logout command lines,
+  environment, tasks, tokens, rules paths, and provider hosts; `agent.Load`
+  returns the registry. Behavior a manifest cannot describe is a named handler
+  in Go (slash, keyring, gateway token), never code in the manifest.
 - `images`: unified workspace Docker image with on-demand agent installation
-  (`hewitt-agent`), Node/npm, Go, Python/venv, native build tools, and the gateway
+  (`hewitt-agent`, which runs the launches and installations Hewitt passes it
+  and knows no agent by name; Hewitt embeds it and mounts its own copy
+  read-only at `/hewitt/agent` in every container it starts agents in, so the
+  script always matches the binary), Node/npm, Go, Python/venv, native build tools, and the gateway
   image, which is the `hewitt` binary built from this source.
   Codex uses Docker as its sandbox; do not enable privileged mode or additional
   capabilities to make its nested namespace sandbox work.
@@ -63,7 +71,7 @@ do not make separate API credits a prerequisite.
   Agent containers mount the tool cache read-only; only `session`'s installer
   container, with no project or profiles, writes to it.
 - Keep Docker calls in the runtime boundary and Git operations in the workspace
-  boundary. Agent adapters describe agent-specific execution; authentication
+  boundary. Agent manifests describe agent-specific execution; authentication
   handles credential lifecycles separately. Neither should depend on Cobra.
 - Keep this a modular monolith: no daemon, database, or cloud dependency without
   an explicit requirement. Define small interfaces at consumers only when needed.

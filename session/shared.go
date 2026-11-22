@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -72,10 +71,10 @@ func lockWorkspace(ctx context.Context, dataDir string, s settings) (string, fun
 }
 
 // reuseWorkspace returns a saved workspace container for key. A container built
-// from an older image, or one Docker no longer has, is returned as stale when
-// no agent is connected to it, so the caller can replace the container and keep
-// its volume.
-func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) (string, *Metadata, error) {
+// from an older image or before one of agents was added, or one Docker no
+// longer has, is returned as stale when no agent is connected to it, so the
+// caller can replace the container and keep its volume.
+func reuseWorkspace(ctx context.Context, dataDir, key string, agents []string, stderr io.Writer) (string, *Metadata, error) {
 	store, err := NewStore(dataDir)
 	if err != nil {
 		return "", nil, err
@@ -106,18 +105,26 @@ func reuseWorkspace(ctx context.Context, dataDir, key string, stderr io.Writer) 
 		if err != nil {
 			return "", nil, err
 		}
+		reason := ""
 		if current != "" && have != "" && current != have {
+			reason = "uses an older " + m.Image
+		} else if !m.MountsAgent {
+			reason = "predates the hewitt-agent that Hewitt mounts"
+		} else if added := slices.DeleteFunc(slices.Clone(agents), func(name string) bool { return slices.Contains(m.WorkspaceAgents(), name) }); len(added) > 0 {
+			reason = "has no profile for " + strings.Join(added, ", ")
+		}
+		if reason != "" {
 			live, err := workspaceRuns(store, m.ID)
 			if err != nil {
 				return "", nil, err
 			}
 			if len(live) == 0 {
-				if _, err := fmt.Fprintf(stderr, "[hewitt] Workspace %s uses an older %s; replacing its container (the volume and its commits are kept)\n", m.Name, m.Image); err != nil {
+				if _, err := fmt.Fprintf(stderr, "[hewitt] Workspace %s %s; replacing its container (the volume and its commits are kept)\n", m.Name, reason); err != nil {
 					return "", nil, err
 				}
 				return "", &m, nil
 			}
-			if err := warn(stderr, "workspace %s uses an older %s; it is updated once its %d connected agent(s) exit", m.Name, m.Image, len(live)); err != nil {
+			if err := warn(stderr, "workspace %s %s; it is updated once its %d connected agent(s) exit", m.Name, reason, len(live)); err != nil {
 				return "", nil, err
 			}
 		}
@@ -182,12 +189,28 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if opts.Shell {
 		choice = "shell"
 	}
-	command := []string{"hewitt-agent", "run"}
+	if !m.MountsAgent {
+		return &OutdatedWorkspaceError{Workspace: m.Name, Reason: "was created by an older Hewitt that did not mount its hewitt-agent"}
+	}
+	_, launcher, err := agentScript(opts.DataDir)
+	if err != nil {
+		return err
+	}
+	command := []string{launcher, "run"}
 	if choice != "workspace" {
 		command = append(command, choice)
 	}
-	if opts.Prompt != "" && !slices.Contains(agent.TaskAgents, choice) {
-		return fmt.Errorf("%s does not accept a task yet (tasks work with %s); start it without -p", choice, strings.Join(agent.TaskAgents, ", "))
+	var chosen agent.Manifest
+	if choice != "workspace" && choice != "shell" {
+		if chosen, err = s.agents.Lookup(choice); err != nil {
+			return err
+		}
+		if !slices.Contains(m.WorkspaceAgents(), choice) {
+			return &OutdatedWorkspaceError{Workspace: m.Name, Reason: "was created before agent " + choice + " was added"}
+		}
+	}
+	if opts.Prompt != "" && chosen.Task == nil {
+		return fmt.Errorf("%s does not accept a task (tasks work with %s); start it without -p", choice, strings.Join(s.agents.TaskAgents(), ", "))
 	}
 	if opts.Task != "" {
 		if err := ValidTaskName(opts.Task); err != nil {
@@ -199,7 +222,7 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	}
 	if choice != "workspace" && choice != "shell" {
 		// The workspace mounts the tool cache read-only; install before exec.
-		if err := ensureTool(ctx, opts.DataDir, m.Image, choice, stderr); err != nil {
+		if err := ensureTool(ctx, opts.DataDir, m.Image, chosen, stderr); err != nil {
 			return err
 		}
 	}
@@ -223,23 +246,42 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 		return err
 	}
 	env, files := runEnv(m.Egress, run.ID, choice), []string(nil)
-	if choice == "claude" {
+	_, allow, err := s.envFile()
+	if err != nil {
+		return err
+	}
+	if chosen.Token != nil {
 		// Chosen per launch, so a login after the workspace was created applies.
-		token, tokenFiles, err := agentToken(opts.DataDir, m.Profile, "claude", m.Egress != nil)
+		token, tokenFiles, err := agentToken(opts.DataDir, m.Profile, chosen, m.Egress != nil)
 		if err != nil {
 			return err
 		}
 		env, files = append(env, token...), tokenFiles
+		allow = append(allow, chosen.Token.Variable)
 	}
-	if opts.Prompt != "" {
-		env = append(env, "HEWITT_PROMPT_B64="+base64.StdEncoding.EncodeToString([]byte(opts.Prompt)))
-		if opts.Task != "" {
-			env = append(env, "HEWITT_TASK="+opts.Task)
+	switch choice {
+	case "shell":
+	case "workspace":
+		// hewitt-agent asks which agent to open.
+		menu, err := menuEnv(s.agents, m.WorkspaceAgents(), s.Telemetry, allow)
+		if err != nil {
+			return err
 		}
-		if opts.Headless {
-			// Without a terminal the agent prints its result and exits.
-			env, in = append(env, "HEWITT_HEADLESS=1"), strings.NewReader("")
+		env = append(env, menu...)
+	default:
+		launch, err := chosen.Launch(agent.OpRun, agent.LaunchOptions{Profile: agent.ProfilesPath + "/" + choice,
+			Prompt: opts.Prompt, Headless: opts.Headless, Telemetry: s.Telemetry, Allow: allow})
+		if err != nil {
+			return err
 		}
+		env = append(env, launch.Env()...)
+	}
+	if opts.Task != "" {
+		env = append(env, "HEWITT_TASK="+opts.Task)
+	}
+	if opts.Headless {
+		// Without a terminal the agent prints its result and exits.
+		in = strings.NewReader("")
 	}
 	// Requests of this launch appear where its agent waits for them.
 	watch, stopWatch := context.WithCancel(ctx)
@@ -247,7 +289,7 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	client := docker.Client{}
 	if !opts.Headless {
 		// Lets a terminal manager such as Herdr recognize the agent.
-		client.Env = terminal.AgentHint(run.Terminal, choice)
+		client.Env = terminal.AgentHint(run.Terminal, chosen.Herdr)
 	}
 	err = client.ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	stopWatch()

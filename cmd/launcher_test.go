@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/profile"
 )
 
@@ -34,7 +33,7 @@ esac
 	if err := os.WriteFile(filepath.Join(home, "docker"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for i, name := range agent.Names[:2] {
+	for i, name := range []string{"claude", "codex"} {
 		root := NewRootCommand("test")
 		var out, diagnostic bytes.Buffer
 		input := "\n"
@@ -79,8 +78,8 @@ esac
 		strings.Count(string(raw), " observe /hewitt/observer/config.json") != 1 {
 		t.Fatalf("created another container: %s", raw)
 	}
-	for _, name := range agent.Names[:2] {
-		if !strings.Contains(string(raw), "hewitt-agent run "+name) {
+	for _, name := range []string{"claude", "codex"} {
+		if !strings.Contains(string(raw), " run "+name) {
 			t.Fatalf("wrong launch command: %s", raw)
 		}
 	}

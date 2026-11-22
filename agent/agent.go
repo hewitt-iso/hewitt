@@ -1,270 +1,392 @@
-// Package agent describes native coding clients independently of Docker and Cobra.
+// Package agent describes native coding clients independently of Docker and
+// Cobra. Each client is a manifest: the built-in ones in manifests/, compiled
+// into Hewitt, and the user's own in <data_dir>/agents, which may add clients
+// or replace built-in ones of the same name.
 package agent
 
 import (
+	"bytes"
+	"embed"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
+
+	"go.yaml.in/yaml/v3"
 )
 
-// ProfilePath is the stable container-visible mount point for native client state.
+// ProfilePath is where authentication containers mount the one profile they
+// use. Workspace containers mount every agent's profile under ProfilesPath.
 const ProfilePath = "/hewitt/profile"
+
+// ProfilesPath holds one profile per agent in workspace containers.
+const ProfilesPath = "/hewitt/profiles"
 
 // DefaultImage is the unified workspace image used when no image is specified.
 const DefaultImage = "ghcr.io/hewitt-iso/hewitt:latest"
 
-// Invocation contains only non-secret launch configuration. Credentials belong
-// to the native client's files, never to this structure.
-type Invocation struct {
-	Entrypoint string
-	Args       []string
-	Env        []string
+//go:embed manifests/*.yaml
+var builtinFiles embed.FS
+
+// order lists built-in agents in display order; user agents follow by name.
+var order = []string{"claude", "codex", "opencode", "pi", "antigravity"}
+
+var (
+	agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	envKey    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	binary    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	npmName   = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	version   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$`)
+	hostRule  = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$`)
+)
+
+// ValidName reports whether name can name an agent, its profile, and its
+// manifest file.
+func ValidName(name string) bool { return agentName.MatchString(name) }
+
+// Manifest describes how Hewitt installs, launches, and authenticates one
+// native client. It holds no credentials.
+type Manifest struct {
+	Version int    `yaml:"version"`
+	Name    string `yaml:"name"`
+	// Binary is the client's executable in the tool cache.
+	Binary  string  `yaml:"binary"`
+	Image   string  `yaml:"image"`
+	Install Install `yaml:"install"`
+	// Env is set for every launch; {profile} is the agent's profile directory.
+	Env map[string]string `yaml:"env"`
+	// UnsetEnv names variables removed before launch even when an image sets
+	// them; keys from the user's env file are kept.
+	UnsetEnv []string `yaml:"unset_env"`
+	// Wrap names a launch handler, such as keyring.
+	Wrap     string   `yaml:"wrap"`
+	Commands Commands `yaml:"commands"`
+	// Task, when set, lets the client take a task from hewitt run -p.
+	Task *Task `yaml:"task"`
+	// Telemetry is appended to run arguments when telemetry is configured;
+	// {endpoint} is the OTLP endpoint.
+	Telemetry []string `yaml:"telemetry"`
+	Token     *Token   `yaml:"token"`
+	// ConfigDir is where the client reads user-level rules and settings, and
+	// Instructions its main rules file; both lie in {profile}.
+	ConfigDir    string   `yaml:"config_dir"`
+	Instructions string   `yaml:"instructions"`
+	Hosts        []string `yaml:"hosts"`
+	// Herdr is the agent kind Herdr knows the client by.
+	Herdr string `yaml:"herdr"`
+	// Source is the manifest file, or "built-in".
+	Source string `yaml:"-"`
 }
 
-// Allow keeps keys that the invocation would otherwise remove with env -u, so
-// credentials supplied explicitly by the user, such as an API key from an env
-// file, reach the client. Other conflicting variables are still removed.
-func (inv Invocation) Allow(keys ...string) Invocation {
-	args := make([]string, 0, len(inv.Args))
-	for i := 0; i < len(inv.Args); i++ {
-		if inv.Args[i] == "-u" && i+1 < len(inv.Args) && slices.Contains(keys, inv.Args[i+1]) {
-			i++
+// Install describes one installation handler: an npm package or an install
+// script that leaves the executable at Output, relative to its temporary
+// home. Script arguments may use {version} and {tmp}.
+type Install struct {
+	NPM     string   `yaml:"npm"`
+	Scripts *bool    `yaml:"scripts"`
+	Script  string   `yaml:"script"`
+	Args    []string `yaml:"args"`
+	Output  string   `yaml:"output"`
+	Version string   `yaml:"version"`
+}
+
+// Commands are the client's arguments for each operation. Headless runs use
+// Run unless Headless is set.
+type Commands struct {
+	Run      []string `yaml:"run"`
+	Headless []string `yaml:"headless"`
+	Login    Command  `yaml:"login"`
+	Status   Command  `yaml:"status"`
+	Logout   Command  `yaml:"logout"`
+}
+
+// Command is either the client's arguments or a slash command that Hewitt
+// types into the client's interface.
+type Command struct {
+	Args  []string
+	Slash string
+}
+
+func (c *Command) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.SequenceNode {
+		return n.Decode(&c.Args)
+	}
+	var v struct {
+		Slash string `yaml:"slash"`
+	}
+	if err := n.Decode(&v); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(v.Slash, "/") || strings.ContainsAny(v.Slash, "\n\r") {
+		return fmt.Errorf("line %d: slash must be one command starting with /", n.Line)
+	}
+	c.Slash = v.Slash
+	return nil
+}
+
+// Task gives the arguments that pass a task, {prompt}, to the client.
+type Task struct {
+	Interactive []string `yaml:"interactive"`
+	Headless    []string `yaml:"headless"`
+}
+
+// Token is a long-lived token that the client's login prints and Hewitt
+// saves. Behind a gateway, agents hold Placeholder and the gateway replaces
+// it with the token in requests to Hosts.
+type Token struct {
+	Variable    string   `yaml:"variable"`
+	Placeholder string   `yaml:"placeholder"`
+	Hosts       []string `yaml:"hosts"`
+}
+
+var builtin = sync.OnceValues(func() ([]Manifest, error) {
+	var list []Manifest
+	for _, name := range order {
+		data, err := builtinFiles.ReadFile("manifests/" + name + ".yaml")
+		if err != nil {
+			return nil, err
+		}
+		m, err := parse(data, name, "built-in")
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, m)
+	}
+	return list, nil
+})
+
+// Builtin returns the manifests compiled into Hewitt.
+func Builtin() []Manifest {
+	list, err := builtin()
+	if err != nil {
+		panic(fmt.Sprintf("built-in agent manifests: %v", err))
+	}
+	return slices.Clone(list)
+}
+
+// Registry is the set of agents available to one data directory.
+type Registry struct{ list []Manifest }
+
+// Load returns the built-in agents and the user's manifests in
+// <dataDir>/agents/<name>.yaml. A user manifest replaces the built-in agent
+// of the same name. Invalid manifests are errors, never silently skipped.
+func Load(dataDir string) (*Registry, error) {
+	r := &Registry{list: Builtin()}
+	if dataDir == "" {
+		return r, nil
+	}
+	dir := filepath.Join(dataDir, "agents")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return r, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read agent manifests: %w", err)
+	}
+	var added []Manifest
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".yaml")
+		if !ok {
+			name, ok = strings.CutSuffix(e.Name(), ".yml")
+		}
+		if !ok || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		args = append(args, inv.Args[i])
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read agent manifest: %w", err)
+		}
+		m, err := parse(data, name, path)
+		if err != nil {
+			return nil, err
+		}
+		if i := slices.IndexFunc(r.list, func(b Manifest) bool { return b.Name == m.Name }); i >= 0 {
+			if r.list[i].Source != "built-in" {
+				return nil, fmt.Errorf("agent %s is defined by both %s and %s", m.Name, r.list[i].Source, path)
+			}
+			r.list[i] = m
+			continue
+		}
+		if slices.ContainsFunc(added, func(b Manifest) bool { return b.Name == m.Name }) {
+			return nil, fmt.Errorf("agent %s is defined twice in %s", m.Name, dir)
+		}
+		added = append(added, m)
 	}
-	inv.Args = args
-	return inv
+	slices.SortFunc(added, func(a, b Manifest) int { return strings.Compare(a.Name, b.Name) })
+	r.list = append(r.list, added...)
+	return r, nil
 }
 
-// Adapter supplies native run and subscription-login commands for one client.
-// Implementations do not read credentials or perform OAuth/refresh themselves.
-type Adapter interface {
-	Name() string
-	// DefaultImage is empty when the caller must select an image explicitly.
-	DefaultImage() string
-	Run() Invocation
-	Login() Invocation
-	Status() Invocation
-	Logout() Invocation
-	// ConfigDir is the container path where the client reads user-level rules,
-	// commands, and settings; InstructionFile is its main rules file there.
-	ConfigDir() string
-	InstructionFile() string
-	// TokenVariable names the environment variable that carries a long-lived
-	// token printed by Login, or is empty when the client stores its own login.
-	TokenVariable() string
-	// Hosts are the provider endpoints a restricted session's egress proxy allows.
-	Hosts() []string
+// Names lists the agents in display order.
+func (r *Registry) Names() []string {
+	names := make([]string, len(r.list))
+	for i, m := range r.list {
+		names[i] = m.Name
+	}
+	return names
 }
 
-// Names lists the implemented adapters in display order. Callers that mount
-// profiles or build allowlists for every agent iterate over it.
-var Names = []string{"claude", "codex", "opencode", "pi", "antigravity"}
+// TaskAgents lists the agents that accept a task from hewitt run -p.
+func (r *Registry) TaskAgents() []string {
+	var names []string
+	for _, m := range r.list {
+		if m.Task != nil {
+			names = append(names, m.Name)
+		}
+	}
+	return names
+}
 
-// TaskAgents accept a task from hewitt run -p as their initial prompt, and
-// run it without their interface when headless.
-var TaskAgents = []string{"claude", "codex", "opencode", "pi"}
+// All returns every manifest in display order.
+func (r *Registry) All() []Manifest { return slices.Clone(r.list) }
 
-// Lookup selects an implemented adapter. Unsupported clients fail explicitly.
-func Lookup(name string) (Adapter, error) {
-	switch name {
-	case "claude":
-		return Claude{}, nil
-	case "codex":
-		return Codex{}, nil
-	case "opencode":
-		return OpenCode{}, nil
-	case "pi":
-		return Pi{}, nil
-	case "antigravity":
-		return Antigravity{}, nil
+// Lookup returns the manifest of one agent.
+func (r *Registry) Lookup(name string) (Manifest, error) {
+	for _, m := range r.list {
+		if m.Name == name {
+			return m, nil
+		}
+	}
+	return Manifest{}, &UnknownAgentError{Name: name, Supported: r.Names()}
+}
+
+func parse(data []byte, name, source string) (Manifest, error) {
+	var m Manifest
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&m); err != nil {
+		return Manifest{}, &ManifestError{Source: source, Err: err}
+	}
+	m.Source = source
+	if err := m.validate(name); err != nil {
+		return Manifest{}, &ManifestError{Source: source, Err: err}
+	}
+	return m, nil
+}
+
+func (m Manifest) validate(file string) error {
+	switch {
+	case m.Version != 1:
+		return fmt.Errorf("version must be 1")
+	case !ValidName(m.Name) || m.Name == "workspace" || m.Name == "shell":
+		return fmt.Errorf("name %q must be 1-32 lowercase letters, digits, or hyphens, start with a letter, and not be workspace or shell", m.Name)
+	case m.Name != file:
+		return fmt.Errorf("name %s must match the file name %s", m.Name, file)
+	case !binary.MatchString(m.Binary):
+		return fmt.Errorf("binary %q must be a plain executable name", m.Binary)
+	case strings.ContainsFunc(m.Image, func(r rune) bool { return r <= ' ' }) || strings.HasPrefix(m.Image, "-"):
+		return fmt.Errorf("image %q is not a Docker image reference", m.Image)
+	case m.Wrap != "" && m.Wrap != "keyring":
+		return fmt.Errorf("wrap %q is not a launch handler (known: keyring)", m.Wrap)
+	case len(m.Hosts) == 0:
+		return fmt.Errorf("hosts must list the provider endpoints restricted sessions allow")
+	}
+	if err := m.Install.validate(); err != nil {
+		return fmt.Errorf("install: %w", err)
+	}
+	for key, value := range m.Env {
+		if !envKey.MatchString(key) || strings.HasPrefix(key, "HEWITT_") {
+			return fmt.Errorf("env: %q is not a variable name Hewitt passes to agents", key)
+		}
+		if strings.ContainsAny(value, "\x00\n") {
+			return fmt.Errorf("env %s: value must be one line", key)
+		}
+	}
+	for _, key := range m.UnsetEnv {
+		if !envKey.MatchString(key) {
+			return fmt.Errorf("unset_env: %q is not a variable name", key)
+		}
+	}
+	args := map[string][]string{"run": m.Commands.Run, "headless": m.Commands.Headless, "login": m.Commands.Login.Args,
+		"status": m.Commands.Status.Args, "logout": m.Commands.Logout.Args, "telemetry": m.Telemetry}
+	if m.Task != nil {
+		if !slices.ContainsFunc(m.Task.Interactive, hasPrompt) || !slices.ContainsFunc(m.Task.Headless, hasPrompt) {
+			return fmt.Errorf("task: interactive and headless must both pass {prompt}")
+		}
+		args["task.interactive"], args["task.headless"] = m.Task.Interactive, m.Task.Headless
+	}
+	for field, list := range args {
+		for _, arg := range list {
+			if strings.ContainsRune(arg, 0) {
+				return fmt.Errorf("commands.%s: arguments must not contain NUL", field)
+			}
+			if hasPrompt(arg) && !strings.HasPrefix(field, "task.") {
+				return fmt.Errorf("%s: only task arguments may use {prompt}", field)
+			}
+		}
+	}
+	if m.Token != nil {
+		if !envKey.MatchString(m.Token.Variable) || !slices.Contains(m.UnsetEnv, m.Token.Variable) {
+			return fmt.Errorf("token: variable must be a variable name that unset_env also lists")
+		}
+		if len(m.Token.Hosts) > 0 && (m.Token.Placeholder == "" || strings.ContainsFunc(m.Token.Placeholder, func(r rune) bool { return r <= ' ' })) {
+			return fmt.Errorf("token: hosts need a placeholder without whitespace")
+		}
+		for _, host := range m.Token.Hosts {
+			if !hostRule.MatchString(host) || strings.HasPrefix(host, "*.") {
+				return fmt.Errorf("token: %q must be an exact host", host)
+			}
+		}
+	}
+	for _, host := range m.Hosts {
+		if !hostRule.MatchString(host) {
+			return fmt.Errorf("hosts: %q must be a lowercase host, *.domain, or host:port", host)
+		}
+	}
+	for field, path := range map[string]string{"config_dir": m.ConfigDir, "instructions": m.Instructions} {
+		rest, ok := strings.CutPrefix(path, "{profile}/")
+		if !ok || rest == "" || filepath.Clean(rest) != rest || strings.HasPrefix(rest, "..") {
+			return fmt.Errorf("%s %q must be a path inside {profile}", field, path)
+		}
+	}
+	if !strings.HasPrefix(m.Instructions, m.ConfigDir+"/") {
+		return fmt.Errorf("instructions must lie in config_dir")
+	}
+	if m.Herdr != "" && !binary.MatchString(m.Herdr) {
+		return fmt.Errorf("herdr %q must be a Herdr agent kind", m.Herdr)
+	}
+	return nil
+}
+
+func (i Install) validate() error {
+	switch {
+	case i.NPM != "" && i.Script != "":
+		return fmt.Errorf("use either npm or script")
+	case i.NPM != "":
+		if !npmName.MatchString(i.NPM) || len(i.Args) > 0 || i.Output != "" {
+			return fmt.Errorf("npm %q must be a package name; args and output apply to scripts", i.NPM)
+		}
+	case i.Script != "":
+		if !strings.HasPrefix(i.Script, "https://") || strings.ContainsFunc(i.Script, func(r rune) bool { return r <= ' ' }) {
+			return fmt.Errorf("script must be an https:// URL")
+		}
+		if i.Scripts != nil {
+			return fmt.Errorf("scripts applies to npm packages")
+		}
+		if i.Output == "" || filepath.IsAbs(i.Output) || filepath.Clean(i.Output) != i.Output || strings.HasPrefix(i.Output, "..") {
+			return fmt.Errorf("output must be a relative path inside the installer's temporary home")
+		}
+		for _, arg := range i.Args {
+			if strings.ContainsRune(arg, 0) {
+				return fmt.Errorf("args must not contain NUL")
+			}
+		}
 	default:
-		return nil, fmt.Errorf("agent %q has no implemented adapter (supported: %s)", name, strings.Join(Names, ", "))
+		return fmt.Errorf("set npm or script")
 	}
-}
-
-// Claude uses the unmodified Claude Code binary and its own subscription login.
-type Claude struct{}
-
-func (Claude) DefaultImage() string { return DefaultImage }
-
-func (Claude) Name() string    { return "claude" }
-func (Claude) Run() Invocation { return claudeInvocation() }
-
-// Login runs setup-token: the official subscription flow that prints a
-// long-lived OAuth token. Sessions share it without refresh-token rotation.
-func (Claude) Login() Invocation  { return claudeInvocation("setup-token") }
-func (Claude) Status() Invocation { return claudeInvocation("auth", "status") }
-func (Claude) Logout() Invocation { return claudeInvocation("auth", "logout") }
-func (Claude) ConfigDir() string  { return ProfilePath + "/claude" }
-func (Claude) TokenVariable() string {
-	return "CLAUDE_CODE_OAUTH_TOKEN"
-}
-func (Claude) Hosts() []string {
-	return []string{"api.anthropic.com", "claude.ai", "platform.claude.com", "console.anthropic.com"}
-}
-func (Claude) InstructionFile() string {
-	return ProfilePath + "/claude/CLAUDE.md"
-}
-
-func claudeInvocation(args ...string) Invocation {
-	return invocation("claude", args, []string{"CLAUDE_CONFIG_DIR=" + ProfilePath + "/claude"}, []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_USE_BEDROCK",
-		"CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-	})
-}
-
-// Codex uses a dedicated native file store so login survives container recreation.
-type Codex struct{}
-
-func (Codex) DefaultImage() string { return DefaultImage }
-
-func (Codex) Name() string { return "codex" }
-
-// Docker supplies the sandbox. Codex's nested namespace sandbox cannot run
-// with the container's dropped capabilities and no-new-privileges defaults.
-func (Codex) Run() Invocation    { return codexInvocation("--sandbox", "danger-full-access") }
-func (Codex) Login() Invocation  { return codexInvocation("login", "--device-auth") }
-func (Codex) Status() Invocation { return codexInvocation("login", "status") }
-func (Codex) Logout() Invocation { return codexInvocation("logout") }
-func (Codex) ConfigDir() string  { return ProfilePath + "/codex" }
-func (Codex) TokenVariable() string {
-	return ""
-}
-func (Codex) Hosts() []string {
-	return []string{"api.openai.com", "chatgpt.com", "auth.openai.com"}
-}
-func (Codex) InstructionFile() string {
-	return ProfilePath + "/codex/AGENTS.md"
-}
-
-func codexInvocation(args ...string) Invocation {
-	command := []string{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`}
-	command = append(command, args...)
-	return invocation("codex", command, []string{"CODEX_HOME=" + ProfilePath + "/codex"}, []string{
-		"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL",
-		"OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_PROVIDER",
-	})
-}
-
-// OpenCode uses its native provider login (opencode auth login): for example
-// GitHub Copilot device login or ChatGPT Plus/Pro, or provider API keys from an
-// env file. Its credentials live in XDG_DATA_HOME/opencode/auth.json, which is
-// inside the profile.
-type OpenCode struct{}
-
-func (OpenCode) DefaultImage() string { return DefaultImage }
-
-func (OpenCode) Name() string       { return "opencode" }
-func (OpenCode) Run() Invocation    { return openCodeInvocation() }
-func (OpenCode) Login() Invocation  { return openCodeInvocation("auth", "login") }
-func (OpenCode) Status() Invocation { return openCodeInvocation("auth", "list") }
-func (OpenCode) Logout() Invocation { return openCodeInvocation("auth", "logout") }
-func (OpenCode) ConfigDir() string  { return ProfilePath + "/config/opencode" }
-func (OpenCode) InstructionFile() string {
-	return ProfilePath + "/config/opencode/AGENTS.md"
-}
-func (OpenCode) TokenVariable() string { return "" }
-func (OpenCode) Hosts() []string {
-	return []string{
-		"opencode.ai", "models.dev",
-		"github.com", "api.github.com", "*.githubcopilot.com",
-		"api.openai.com", "chatgpt.com", "auth.openai.com",
+	if i.Version != "" && !version.MatchString(i.Version) {
+		return fmt.Errorf("version %q must be a version or tag", i.Version)
 	}
+	return nil
 }
 
-func openCodeInvocation(args ...string) Invocation {
-	// Provider keys baked into images are removed; keys from an env file are
-	// kept by Invocation.Allow. Disabling default plugins would hide the
-	// built-in subscription logins, so that override is removed too.
-	return invocation("opencode", args, []string{"OPENCODE_DISABLE_AUTOUPDATE=1"}, []string{
-		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
-		"OPENROUTER_API_KEY", "XAI_API_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN",
-		"OPENCODE_DISABLE_DEFAULT_PLUGINS", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT",
-	})
-}
+func hasPrompt(s string) bool { return strings.Contains(s, "{prompt}") }
 
-// Pi (pi.dev) logs in only through its /login command; hewitt-agent slash
-// starts it and types the command. Credentials live in PI_CODING_AGENT_DIR,
-// inside the profile, as auth.json (0600).
-type Pi struct{}
-
-func (Pi) DefaultImage() string    { return DefaultImage }
-func (Pi) Name() string            { return "pi" }
-func (Pi) Run() Invocation         { return piInvocation("pi") }
-func (Pi) Login() Invocation       { return piInvocation("slash", "pi", "/login") }
-func (Pi) Status() Invocation      { return piInvocation("pi", "--list-models") }
-func (Pi) Logout() Invocation      { return piInvocation("slash", "pi", "/logout") }
-func (Pi) ConfigDir() string       { return ProfilePath + "/pi" }
-func (Pi) InstructionFile() string { return ProfilePath + "/pi/AGENTS.md" }
-func (Pi) TokenVariable() string   { return "" }
-func (Pi) Hosts() []string {
-	return []string{
-		"registry.npmjs.org", "github.com", "api.github.com", "objects.githubusercontent.com",
-		"api.anthropic.com", "claude.ai", "console.anthropic.com",
-		"api.openai.com", "auth.openai.com", "chatgpt.com",
-		"*.githubcopilot.com", "accounts.google.com", "oauth2.googleapis.com",
-		"www.googleapis.com", "cloudcode-pa.googleapis.com", "generativelanguage.googleapis.com",
-	}
-}
-
-func piInvocation(binary string, args ...string) Invocation {
-	return invocation(binary, args, []string{"PI_CODING_AGENT_DIR=" + ProfilePath + "/pi", "PI_SKIP_VERSION_CHECK=1"}, []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
-		"OPENROUTER_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
-		"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "PI_CODING_AGENT_SESSION_DIR",
-	})
-}
-
-// Antigravity runs Google's agy CLI. agy keeps its login in the Secret Service
-// keyring, so hewitt-agent starts a private D-Bus session with gnome-keyring
-// whose keyring file lives in the profile's XDG_DATA_HOME. Plain agy opens
-// its sign-in menu when the profile has no login.
-type Antigravity struct{}
-
-func (Antigravity) DefaultImage() string    { return DefaultImage }
-func (Antigravity) Name() string            { return "antigravity" }
-func (Antigravity) Run() Invocation         { return antigravityInvocation("agy") }
-func (Antigravity) Login() Invocation       { return antigravityInvocation("agy") }
-func (Antigravity) Status() Invocation      { return antigravityInvocation("agy", "models") }
-func (Antigravity) Logout() Invocation      { return antigravityInvocation("slash", "agy", "/logout") }
-func (Antigravity) ConfigDir() string       { return ProfilePath + "/home/.gemini" }
-func (Antigravity) InstructionFile() string { return ProfilePath + "/home/.gemini/GEMINI.md" }
-func (Antigravity) TokenVariable() string   { return "" }
-func (Antigravity) Hosts() []string {
-	return []string{
-		"accounts.google.com", "oauth2.googleapis.com", "www.googleapis.com",
-		"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com",
-		"generativelanguage.googleapis.com", "antigravity.google",
-		"antigravity-cli-auto-updater-974169037036.us-central1.run.app",
-	}
-}
-
-func antigravityInvocation(binary string, args ...string) Invocation {
-	return invocation(binary, args, nil, []string{
-		"GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
-		"DBUS_SESSION_BUS_ADDRESS",
-	})
-}
-
-func invocation(binary string, args, env, unset []string) Invocation {
-	// env -u removes conflicting credentials even if baked into an image's ENV.
-	// Arguments are passed directly, never interpolated into a shell command.
-	command := make([]string, 0, len(unset)*2+2+len(args))
-	for _, key := range unset {
-		command = append(command, "-u", key)
-	}
-	command = append(command, "hewitt-agent", binary)
-	command = append(command, args...)
-	base := []string{
-		"HOME=" + ProfilePath + "/home",
-		"XDG_CONFIG_HOME=" + ProfilePath + "/config",
-		"XDG_DATA_HOME=" + ProfilePath + "/data",
-		"XDG_STATE_HOME=" + ProfilePath + "/state",
-		"XDG_CACHE_HOME=" + ProfilePath + "/cache",
-	}
-	return Invocation{Entrypoint: "env", Args: command, Env: append(base, env...)}
-}
+// Profile returns path with {profile} replaced by root.
+func Profile(path, root string) string { return strings.Replace(path, "{profile}", root, 1) }

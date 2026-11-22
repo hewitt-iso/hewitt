@@ -44,10 +44,10 @@ func TestCurrentLocatesHerdrPanes(t *testing.T) {
 	if err != nil || l != (Location{HerdrSocket: "/run/herdr.sock", HerdrPane: "w2:p3"}) || !l.Kept() || l.Manager() != "herdr" {
 		t.Fatalf("location = %+v, %v", l, err)
 	}
-	if hint := AgentHint(l, "antigravity"); len(hint) != 1 || hint[0] != "HERDR_AGENT=agy" {
+	if hint := AgentHint(l, "agy"); len(hint) != 1 || hint[0] != "HERDR_AGENT=agy" {
 		t.Fatalf("hint = %q", hint)
 	}
-	if hint := AgentHint(l, "shell"); hint != nil {
+	if hint := AgentHint(l, ""); hint != nil {
 		t.Fatalf("shell hint = %q", hint)
 	}
 	// A tmux started inside the Herdr pane is the closer pane.

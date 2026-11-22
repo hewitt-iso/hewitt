@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -145,7 +146,8 @@ func fakeAuthDocker(t *testing.T, failLogout bool) string {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	exit := ""
 	if failLogout {
-		exit = `if [ "$3" = "--attach" ] && grep -q '^logout$' "$HEWITT_CALLS"; then exit 1; fi`
+		// The first attached container of a relogin is its logout.
+		exit = `if [ "$3" = "--attach" ] && [ ! -e "$HEWITT_CALLS.started" ]; then : > "$HEWITT_CALLS.started"; exit 1; fi`
 	}
 	script := `#!/bin/sh
 printf '%s\n' "$@" >> "$HEWITT_CALLS"
@@ -161,6 +163,24 @@ esac
 	return log
 }
 
+// launches decodes the command lines that Docker calls hand to hewitt-agent,
+// in call order.
+func launches(t *testing.T, calls string) string {
+	t.Helper()
+	var out strings.Builder
+	for _, line := range strings.Split(calls, "\n") {
+		if spec, ok := strings.CutPrefix(line, "HEWITT_LAUNCH="); ok {
+			raw, err := base64.StdEncoding.DecodeString(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out.WriteString("\x00")
+			out.Write(raw)
+		}
+	}
+	return out.String()
+}
+
 func TestReloginLogsOutBeforeLogin(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprintf("failLogout=%v", fail), func(t *testing.T) {
@@ -172,7 +192,8 @@ func TestReloginLogsOutBeforeLogin(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			logout, login := strings.Index(string(calls), "\nlogout\n"), strings.Index(string(calls), "\n--device-auth\n")
+			launched := launches(t, string(calls))
+			logout, login := strings.Index(launched, "\x00logout\x00"), strings.Index(launched, "\x00--device-auth\x00")
 			if !strings.Contains(stderr.String(), "Relogin 1/2: logging out of codex (profile personal)") {
 				t.Fatalf("relogin progress = %q", stderr.String())
 			}

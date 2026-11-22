@@ -131,7 +131,11 @@ func runOnboarding(cmd *cobra.Command, cfg *config.Config, opts *session.AgentOp
 		}
 	case 0:
 		_, _ = fmt.Fprint(stderr, "\r\n")
-		agents := agent.Names
+		registry, err := agent.Load(cfg.DataDir)
+		if err != nil {
+			return false, err
+		}
+		agents := registry.Names()
 		agentIdx, err := pickOption(in, stderr, "Select agent to log in", agents, "onboarding cancelled", "write onboarding prompt")
 		if err != nil {
 			return false, err

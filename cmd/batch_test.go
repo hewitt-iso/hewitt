@@ -33,7 +33,7 @@ func TestReadTasks(t *testing.T) {
 		t.Fatalf("tasks = %+v", tasks)
 	}
 	for _, tt := range []struct{ content, want string }{
-		{"---\nagent: antigravity\n---\nx", "agent must be one of"},
+		{"---\nagent: Bad_Agent\n---\nx", "is not an agent name"},
 		{"---\nmodel: x\n---\nx", "front matter"},
 		{"---\nagent: codex\nx", "no closing ---"},
 		{"---\nagent: codex\n---\n", "has no prompt"},
@@ -111,7 +111,7 @@ esac
 		}
 	}
 	raw, _ := os.ReadFile(calls)
-	if strings.Count(string(raw), "HEWITT_HEADLESS=1") != 3 || !strings.Contains(string(raw), "hewitt-agent run codex") {
+	if strings.Count(string(raw), "HEWITT_LAUNCH=") != 3 || !strings.Contains(string(raw), "/hewitt/agent/hewitt-agent-") || !strings.Contains(string(raw), " run codex") {
 		t.Fatalf("calls:\n%s", raw)
 	}
 

@@ -81,7 +81,7 @@ Extend focused packages with these boundaries as features arrive:
 | Session management | Extend the existing `session` package with lifecycle coordination |
 | Container runtime | Extend the existing `docker` package with lifecycle operations and workspace mounts |
 | Git workspaces | Create, inspect, and safely remove Git worktrees |
-| Agent adapters | Extend `agent` with native launch commands and capabilities |
+| Agents | Add a manifest to `agent/manifests`; a new handler goes in `agent` |
 | Authentication | Native login flows with private directories managed by `profile` |
 
 Session management coordinates the other components without depending on

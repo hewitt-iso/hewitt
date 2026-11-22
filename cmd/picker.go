@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hewitt-iso/hewitt/agent"
+	"slices"
+
 	"github.com/hewitt-iso/hewitt/config"
 	"github.com/hewitt-iso/hewitt/session"
 	"github.com/spf13/cobra"
@@ -288,8 +289,8 @@ func completeSessions(cfg *config.Config, filter func(ctx context.Context, m ses
 }
 
 // pickAgent runs before Docker setup, so cancelling never creates a workspace.
-func pickAgent(in io.Reader, stderr io.Writer) (string, error) {
-	options := append(append([]string{}, agent.Names...), "shell")
+func pickAgent(in io.Reader, stderr io.Writer, names []string) (string, error) {
+	options := append(slices.Clone(names), "shell")
 	idx, err := pickOption(in, stderr, "Select agent", options, "agent selection cancelled", "write agent picker")
 	if err != nil {
 		return "", err

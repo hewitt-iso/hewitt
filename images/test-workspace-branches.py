@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 
 source = Path(__file__).with_name('hewitt-agent').read_text()
-function = source[source.index('create_worktree_if_needed() {'):source.index('\nexec_agent() {')]
+function = source[source.index('create_worktree_if_needed() {'):source.index('\nexec_shell() {')]
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     repo = root / 'project'

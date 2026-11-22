@@ -44,8 +44,12 @@ func newBatchCommand(cfg *config.Config) *cobra.Command {
 			if jobs < 1 {
 				return fmt.Errorf("--jobs must be at least 1")
 			}
-			if agentName != "" && !slices.Contains(agent.TaskAgents, agentName) {
-				return fmt.Errorf("--agent must be one of %s", strings.Join(agent.TaskAgents, ", "))
+			agents, err := agent.Load(cfg.DataDir)
+			if err != nil {
+				return err
+			}
+			if agentName != "" && !slices.Contains(agents.TaskAgents(), agentName) {
+				return fmt.Errorf("--agent must be one of %s", strings.Join(agents.TaskAgents(), ", "))
 			}
 			tasks, err := readTasks(args, agentName)
 			if err != nil {
@@ -64,11 +68,11 @@ func newBatchCommand(cfg *config.Config) *cobra.Command {
 				if tasks[i].agent == "" {
 					tasks[i].agent = project
 				}
-				if !slices.Contains(agent.TaskAgents, tasks[i].agent) {
+				if !slices.Contains(agents.TaskAgents(), tasks[i].agent) {
 					if tasks[i].agent == "workspace" {
 						return fmt.Errorf("task %s names no agent: add agent: to its front matter, pass --agent, or set agent in hewitt.yml", tasks[i].file)
 					}
-					return fmt.Errorf("task %s: %s does not accept a task (tasks work with %s)", tasks[i].file, tasks[i].agent, strings.Join(agent.TaskAgents, ", "))
+					return fmt.Errorf("task %s: %s does not accept a task (tasks work with %s)", tasks[i].file, tasks[i].agent, strings.Join(agents.TaskAgents(), ", "))
 				}
 			}
 			opts.Agent, opts.Prompt = tasks[0].agent, tasks[0].prompt
@@ -170,8 +174,8 @@ func readTaskFile(path string) (batchTask, error) {
 		if err := decoder.Decode(&meta); err != nil && !errors.Is(err, io.EOF) {
 			return batchTask{}, fmt.Errorf("task %s: front matter: %w", path, err)
 		}
-		if meta.Agent != "" && !slices.Contains(agent.TaskAgents, meta.Agent) {
-			return batchTask{}, fmt.Errorf("task %s: agent must be one of %s", path, strings.Join(agent.TaskAgents, ", "))
+		if meta.Agent != "" && !agent.ValidName(meta.Agent) {
+			return batchTask{}, fmt.Errorf("task %s: agent %q is not an agent name", path, meta.Agent)
 		}
 		t.agent, body = meta.Agent, after
 	}

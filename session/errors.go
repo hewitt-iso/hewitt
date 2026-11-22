@@ -29,6 +29,19 @@ type BatchNotFoundError struct{ ID string }
 func (e *BatchNotFoundError) Error() string { return fmt.Sprintf("no batch %q", e.ID) }
 func (*BatchNotFoundError) Hint() string    { return "hewitt tasks --all lists every batch" }
 
+// OutdatedWorkspaceError is a workspace container that cannot open an agent:
+// it was created before the agent was added, or by a Hewitt that did not
+// mount its hewitt-agent.
+type OutdatedWorkspaceError struct{ Workspace, Reason string }
+
+func (e *OutdatedWorkspaceError) Error() string {
+	return fmt.Sprintf("workspace %s %s", e.Workspace, e.Reason)
+}
+
+func (e *OutdatedWorkspaceError) Hint() string {
+	return "the next hewitt run recreates its container once no agent is connected to it (hewitt ps shows them); the volume and its commits are kept"
+}
+
 // UnattributedRequestError is a request that carried no agent connection, so
 // abort could deny it but stop no agent.
 type UnattributedRequestError struct{ Number int }

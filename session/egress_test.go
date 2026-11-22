@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,7 +64,7 @@ func TestClaudeReceivesPlaceholderBehindGateway(t *testing.T) {
 		if strings.Contains(call, secrets) || strings.Contains(call, "real-secret-token") {
 			t.Errorf("agent container receives the token: %s", call)
 		}
-		if strings.Contains(call, "CLAUDE_CODE_OAUTH_TOKEN="+claudePlaceholder) {
+		if strings.Contains(call, "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-hewitt-gateway-managed") {
 			placeholders++
 			if !strings.Contains(call, "NODE_EXTRA_CA_CERTS="+gatewayCA) && !strings.HasPrefix(call, "container exec ") {
 				t.Errorf("placeholder without the gateway CA: %s", call)
@@ -98,9 +100,16 @@ func TestTaskReachesAgentLaunch(t *testing.T) {
 			exec = call
 		}
 	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(task))
-	if !strings.Contains(exec, "--env HEWITT_PROMPT_B64="+encoded) || !strings.Contains(exec, "--env HEWITT_HEADLESS=1") || strings.Contains(exec, "--tty") {
-		t.Fatalf("exec = %s", exec)
+	_, encoded, _ := strings.Cut(exec, "--env HEWITT_LAUNCH=")
+	encoded, _, _ = strings.Cut(encoded, " ")
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || strings.Contains(exec, "--tty") || !regexp.MustCompile(` /hewitt/agent/hewitt-agent-[0-9a-f]{16} run codex$`).MatchString(exec) {
+		t.Fatalf("exec = %s, %v", exec, err)
+	}
+	// The task reaches codex exec, its headless mode, as one argument.
+	argv := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+	if !slices.Contains(argv, "exec") || !slices.Equal(argv[len(argv)-2:], []string{"--", task}) {
+		t.Fatalf("launch = %q", argv)
 	}
 	if strings.Contains(exec, "fix the failing test") {
 		t.Fatalf("task passed in clear text: %s", exec)

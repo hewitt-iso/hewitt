@@ -1,0 +1,37 @@
+# Codex with ChatGPT login in a file store inside the profile. Docker is its
+# sandbox: its nested namespace sandbox cannot run with the container's dropped
+# capabilities and no-new-privileges, so its own sandbox is off.
+version: 1
+name: codex
+binary: codex
+install:
+  npm: "@openai/codex"
+  version: latest
+env:
+  CODEX_HOME: "{profile}/codex"
+unset_env:
+  - OPENAI_API_KEY
+  - CODEX_API_KEY
+  - CODEX_ACCESS_TOKEN
+  - OPENAI_BASE_URL
+  - OPENAI_IDENTITY_TOKEN_FILE
+  - OPENAI_WORKLOAD_IDENTITY_PROVIDER
+commands:
+  run: [--sandbox, danger-full-access, -c, 'cli_auth_credentials_store="file"', -c, 'forced_login_method="chatgpt"', -c, 'projects."{workdir}".trust_level="trusted"']
+  headless: [exec, --dangerously-bypass-approvals-and-sandbox, -c, 'cli_auth_credentials_store="file"', -c, 'forced_login_method="chatgpt"', -c, 'projects."{workdir}".trust_level="trusted"']
+  login: [-c, 'cli_auth_credentials_store="file"', -c, 'forced_login_method="chatgpt"', login, --device-auth]
+  status: [-c, 'cli_auth_credentials_store="file"', -c, 'forced_login_method="chatgpt"', login, status]
+  logout: [-c, 'cli_auth_credentials_store="file"', -c, 'forced_login_method="chatgpt"', logout]
+task:
+  interactive: [--, "{prompt}"]
+  headless: [--, "{prompt}"]
+# Codex reads no OTEL_* variables; metrics would need its analytics switch.
+telemetry:
+  - -c
+  - 'otel.exporter={otlp-http={endpoint="{endpoint}/v1/logs",protocol="binary"}}'
+  - -c
+  - 'otel.trace_exporter={otlp-http={endpoint="{endpoint}/v1/traces",protocol="binary"}}'
+config_dir: "{profile}/codex"
+instructions: "{profile}/codex/AGENTS.md"
+hosts: [api.openai.com, chatgpt.com, auth.openai.com]
+herdr: codex

@@ -26,8 +26,8 @@
 
 ---
 
-Hewitt runs Claude Code, Codex, OpenCode, Pi, and Antigravity in local
-Docker workspaces. Each agent works in its own Git worktree and branch inside
+Hewitt runs Claude Code, Codex, OpenCode, Pi, Antigravity, and any agent you
+describe in a [manifest](docs/agents.md) in local Docker workspaces. Each agent works in its own Git worktree and branch inside
 a shared workspace volume. Your host repository stays separate; sync imports
 the resulting branches when you are ready.
 
@@ -223,6 +223,7 @@ every change. The full reference is in [docs/configuration.md](docs/configuratio
 | Guide | Contents |
 |---|---|
 | [Using Hewitt](docs/usage.md) | Workspaces, agents, SSH push, project dependencies, attach, errors, command reference |
+| [Agents](docs/agents.md) | Built-in agents and adding your own with a manifest |
 | [Configuration](docs/configuration.md) | `hewitt.yml` reference, OpenTelemetry, `config.json`, session metadata |
 | [Security model](docs/security.md) | Gateway, credential injection, observer, approvals, limits |
 | [Legacy modes](docs/legacy-modes.md) | Worktree, direct, copy, exec, and sidecar modes |
