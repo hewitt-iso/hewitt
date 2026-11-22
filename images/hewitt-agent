@@ -8,6 +8,10 @@ if [ -z "${TERM:-}" ] || [ "${TERM:-}" = "screen" ] || [ "${TERM:-}" = "dumb" ];
 fi
 export COLORTERM="${COLORTERM:-truecolor}"
 
+# SELF is this script. Hewitt mounts its own copy, which need not be the one
+# on PATH, so the script starts itself by path.
+SELF="$0"
+
 TOOLS_DIR="${HEWITT_TOOLS_DIR:-/hewitt/tools}"
 BIN_DIR="$TOOLS_DIR/bin"
 export PATH="$BIN_DIR:$PATH"
@@ -24,12 +28,14 @@ if ! getent passwd "$(id -u)" >/dev/null 2>&1 && [ -z "${NSS_WRAPPER_PASSWD:-}" 
 	export NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP LD_PRELOAD="libnss_wrapper.so${LD_PRELOAD:+ $LD_PRELOAD}"
 fi
 
-# agent_binary maps an agent name to its executable.
-agent_binary() {
-	case "$1" in
-	antigravity) printf 'agy\n' ;;
-	*) printf '%s\n' "$1" ;;
-	esac
+# decode_args reads arguments that Hewitt passes as NUL-terminated strings
+# in base64, since environment entries cannot hold arbitrary bytes, into ARGS.
+decode_args() {
+	ARGS=()
+	local arg
+	while IFS= read -r -d '' arg; do
+		ARGS+=("$arg")
+	done < <(printf '%s' "$1" | base64 -d)
 }
 
 # publish atomically replaces an executable in BIN_DIR. Running agents keep
@@ -43,108 +49,95 @@ publish() {
 	mv -f "$tmp" "$BIN_DIR/$name"
 }
 
-ensure_agent() {
-	local agent
-	agent="$(agent_binary "$1")"
-	if [ -x "$BIN_DIR/$agent" ]; then
-		return 0
+# install_tool installs the agent that HEWITT_INSTALL describes into the tool
+# cache: an npm package, or an install script run with a temporary home that
+# leaves the executable at a path inside it.
+install_tool() {
+	if [ -z "${HEWITT_INSTALL:-}" ]; then
+		printf 'hewitt-agent install needs HEWITT_INSTALL from Hewitt\n' >&2
+		return 2
 	fi
-	if command -v "$agent" >/dev/null 2>&1; then
+	decode_args "$HEWITT_INSTALL"
+	local kind="${ARGS[0]}" binary="${ARGS[1]}"
+	if [ -x "$BIN_DIR/$binary" ]; then
 		return 0
-	fi
-	# Agent containers mount the tool cache read-only; Hewitt installs agents
-	# from the host in a separate installer container before launching them.
-	if [ ! -w "$TOOLS_DIR" ]; then
-		printf '%s is not installed in the read-only tool cache; run hewitt run %s on the host to install it\n' "$1" "$1" >&2
-		return 1
 	fi
 	mkdir -p "$BIN_DIR"
-	if [ -x "$TOOLS_DIR/$agent/node_modules/.bin/$agent" ]; then
-		ln -sfn "$TOOLS_DIR/$agent/node_modules/.bin/$agent" "$BIN_DIR/.$agent.$$"
-		mv -f "$BIN_DIR/.$agent.$$" "$BIN_DIR/$agent"
-		return 0
-	fi
-	printf 'Installing %s...\n' "$agent" >&2
-	case "$agent" in
-	claude)
-		local version="${CLAUDE_VERSION:-stable}"
-		local tmp
+	printf 'Installing %s...\n' "$binary" >&2
+	case "$kind" in
+	npm)
+		npm install --prefix "$TOOLS_DIR/$binary" "${ARGS[@]:3}" "${ARGS[2]}" >&2
+		ln -sfn "$TOOLS_DIR/$binary/node_modules/.bin/$binary" "$BIN_DIR/.$binary.$$"
+		mv -f "$BIN_DIR/.$binary.$$" "$BIN_DIR/$binary"
+		;;
+	script)
+		local tmp url="${ARGS[2]}" output="${ARGS[3]}"
 		tmp="$(mktemp -d)"
-		curl -fsSL https://claude.ai/install.sh -o "$tmp/install-claude.sh"
-		HOME="$tmp" bash "$tmp/install-claude.sh" "$version" >&2
-		publish claude "$tmp/.local/bin/claude"
-		rm -rf "$tmp"
-		;;
-	codex)
-		local version="${CODEX_VERSION:-latest}"
-		npm install --prefix "$TOOLS_DIR/codex" "@openai/codex@$version" >&2
-		ln -sfn "$TOOLS_DIR/codex/node_modules/.bin/codex" "$BIN_DIR/.codex.$$"
-		mv -f "$BIN_DIR/.codex.$$" "$BIN_DIR/codex"
-		;;
-	opencode)
-		local version="${OPENCODE_VERSION:-latest}"
-		npm install --prefix "$TOOLS_DIR/opencode" "opencode-ai@$version" >&2
-		ln -sfn "$TOOLS_DIR/opencode/node_modules/.bin/opencode" "$BIN_DIR/.opencode.$$"
-		mv -f "$BIN_DIR/.opencode.$$" "$BIN_DIR/opencode"
-		;;
-	pi)
-		local version="${PI_VERSION:-latest}"
-		npm install --prefix "$TOOLS_DIR/pi" --ignore-scripts "@earendil-works/pi-coding-agent@$version" >&2
-		ln -sfn "$TOOLS_DIR/pi/node_modules/.bin/pi" "$BIN_DIR/.pi.$$"
-		mv -f "$BIN_DIR/.pi.$$" "$BIN_DIR/pi"
-		;;
-	agy)
-		local tmp
-		tmp="$(mktemp -d)"
-		curl -fsSL https://antigravity.google/cli/install.sh -o "$tmp/install-agy.sh"
-		mkdir "$tmp/bin"
-		HOME="$tmp" bash "$tmp/install-agy.sh" --dir "$tmp/bin" >&2
-		publish agy "$tmp/bin/agy"
+		local -a args=("${ARGS[@]:4}")
+		args=("${args[@]//\{tmp\}/$tmp}")
+		mkdir -p "$(dirname "$tmp/$output")"
+		curl -fsSL "$url" -o "$tmp/install.sh"
+		(cd "$tmp" && HOME="$tmp" bash "$tmp/install.sh" "${args[@]}" >&2)
+		publish "$binary" "$tmp/$output"
 		rm -rf "$tmp"
 		;;
 	*)
-		printf 'Unsupported agent: %s\n' "$agent" >&2
+		printf 'Unknown installation kind: %s\n' "$kind" >&2
 		return 1
 		;;
 	esac
 }
 
-# launch execs an installed binary. agy stores its login in the Secret Service
-# keyring, so it runs in a private D-Bus session with gnome-keyring. The keyring
-# file lives in XDG_DATA_HOME, inside the private profile, which is what protects
-# it; the fixed password only lets the daemon create and unlock it without a
-# graphical prompt.
-# codex_otel holds Codex's OTLP log and trace exporters for
-# HEWITT_OTEL_ENDPOINT, which Hewitt validates as scheme://host[:port]. Codex
-# reads no OTEL_* variables, and metrics would require its analytics switch.
-codex_otel=()
-if [ -n "${HEWITT_OTEL_ENDPOINT:-}" ]; then
-	codex_otel=(
-		-c "otel.exporter={otlp-http={endpoint=\"$HEWITT_OTEL_ENDPOINT/v1/logs\",protocol=\"binary\"}}"
-		-c "otel.trace_exporter={otlp-http={endpoint=\"$HEWITT_OTEL_ENDPOINT/v1/traces\",protocol=\"binary\"}}"
-	)
-fi
-
-launch() {
-	local binary="$1"
-	shift
-	if [ "$binary" = "codex" ]; then
-		exec codex "${codex_otel[@]}" "$@"
+# launch_args puts the command line of a launch into ARGS: HEWITT_LAUNCH for
+# the agent Hewitt chose, or the menu's launch of agent $1. The marker in
+# HEWITT_WORKDIR_MARK becomes the directory the agent starts in.
+launch_args() {
+	local spec="${HEWITT_LAUNCH:-}" mark="${HEWITT_WORKDIR_MARK:-}"
+	if [ -n "${1:-}" ]; then
+		local var
+		var="HEWITT_LAUNCH_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+		spec="${!var:-}"
+		var="${var}_MARK"
+		mark="${!var:-}"
 	fi
-	if [ "$binary" != "agy" ]; then
-		exec "$binary" "$@"
+	if [ -z "$spec" ]; then
+		printf 'hewitt: no launch for %s; this image needs a matching hewitt (hewitt run on the host starts agents)\n' "${1:-the agent}" >&2
+		exit 2
 	fi
-	mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/keyrings"
-	exec dbus-run-session -- bash -c 'printf hewitt | gnome-keyring-daemon --replace --unlock --components=secrets >/dev/null 2>&1; exec agy "$@"' agy "$@"
+	decode_args "$spec"
+	if [ -n "$mark" ]; then
+		ARGS=("${ARGS[@]//"$mark"/$PWD}")
+	fi
+	unset HEWITT_LAUNCH HEWITT_WORKDIR_MARK HEWITT_SLASH
+	local name
+	for name in $(compgen -e HEWITT_LAUNCH_); do unset "$name"; done
 }
 
-# slash starts an agent in a private tmux server, types one of its slash
-# commands (such as /login) once the screen settles, and attaches to it, for
-# agents whose login exists only inside their interface.
+# exec_launch starts a launch once a container tmux client, if any, attached,
+# so terminal background and palette queries reach the host terminal.
+exec_launch() {
+	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
+		local tries=0
+		while [ "$tries" -lt 20 ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; do
+			sleep 0.05
+			tries=$((tries + 1))
+		done
+	fi
+	printf '[hewitt] Launching %s...\n' "${choice:-agent}" >&2
+	exec "${ARGS[@]}"
+}
+
+# slash starts the launch in a private tmux server, types HEWITT_SLASH (such
+# as /login) once the screen settles, and attaches to it, for agents whose
+# login exists only inside their interface.
 slash() {
-	local binary="$1" command="$2" socket="/tmp/hewitt-slash-$$.sock"
-	ensure_agent "$binary"
-	tmux -u -f /dev/null -S "$socket" new-session -d -s slash -x "$(tput cols 2>/dev/null || echo 120)" -y "$(tput lines 2>/dev/null || echo 40)" -- hewitt-agent "$binary"
+	local command="${HEWITT_SLASH:-}" socket="/tmp/hewitt-slash-$$.sock"
+	if [ -z "$command" ]; then
+		printf 'hewitt-agent slash needs HEWITT_SLASH from Hewitt\n' >&2
+		exit 2
+	fi
+	unset HEWITT_SLASH
+	tmux -u -f /dev/null -S "$socket" new-session -d -s slash -x "$(tput cols 2>/dev/null || echo 120)" -y "$(tput lines 2>/dev/null || echo 40)" -- "$SELF" launch
 	# Wait until the screen has been unchanged for a second (startup finished).
 	local previous="" current i stable=0
 	for ((i = 0; i < 240 && stable < 2; i++)); do
@@ -204,119 +197,6 @@ create_worktree_if_needed() {
 		target="$wt_path/$HEWITT_SUBDIR"
 	fi
 	cd "$target"
-}
-
-exec_agent() {
-	local agent="$1"
-	shift
-	printf '[hewitt] Checking %s installation...\n' "$agent" >&2
-	ensure_agent "$agent"
-	printf '[hewitt] Preparing %s profile...\n' "$agent" >&2
-	local profile_root="${HEWITT_PROFILES_DIR:-/hewitt/profiles}/$agent"
-	if [ ! -d "$profile_root" ] && [ -d "/hewitt/profile" ]; then
-		profile_root="/hewitt/profile"
-	fi
-	export HOME="$profile_root/home"
-	export XDG_CONFIG_HOME="$profile_root/config"
-	export XDG_DATA_HOME="$profile_root/data"
-	export XDG_STATE_HOME="$profile_root/state"
-	export XDG_CACHE_HOME="$profile_root/cache"
-	mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$profile_root/$agent" 2>/dev/null || true
-
-
-	# Wait briefly for the tmux client to attach so terminal background/palette
-	# queries (OSC 10/11 via tmux passthrough) reach the host terminal.
-	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
-		local tries=0
-		while [ "$tries" -lt 20 ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; do
-			sleep 0.05
-			tries=$((tries + 1))
-		done
-	fi
-
-	# A task from hewitt run -p arrives base64-encoded in HEWITT_PROMPT_B64,
-	# since environment entries cannot hold newlines, and becomes the agent's
-	# own prompt argument. Headless runs use the agent's non-interactive mode,
-	# where it cannot ask, so its permission prompts are off: the container,
-	# gateway, and observer are the boundary.
-	local prompt="" headless="${HEWITT_HEADLESS:-}"
-	if [ -n "${HEWITT_PROMPT_B64:-}" ]; then
-		prompt="$(printf '%s' "$HEWITT_PROMPT_B64" | base64 -d)"
-	fi
-	unset HEWITT_PROMPT_B64 HEWITT_HEADLESS
-	local -a task=()
-	if [ -n "$prompt" ]; then
-		case "$agent" in
-		claude)
-			task=(-- "$prompt")
-			if [ -n "$headless" ]; then task=(-p --permission-mode bypassPermissions -- "$prompt"); fi
-			;;
-		codex) task=(-- "$prompt") ;;
-		opencode)
-			task=("--prompt=$prompt")
-			if [ -n "$headless" ]; then task=(run -- "$prompt"); fi
-			;;
-		pi)
-			task=(-- "$prompt")
-			if [ -n "$headless" ]; then task=(-p -- "$prompt"); fi
-			;;
-		*)
-			printf '%s does not accept a task from Hewitt yet; start it without -p\n' "$agent" >&2
-			exit 2
-			;;
-		esac
-	fi
-
-	printf '[hewitt] Launching %s...\n' "$agent" >&2
-	case "$agent" in
-	claude)
-		export CLAUDE_CONFIG_DIR="$profile_root/claude"
-		export DISABLE_AUTOUPDATER=1
-		exec env \
-			-u ANTHROPIC_API_KEY \
-			-u ANTHROPIC_AUTH_TOKEN \
-			-u ANTHROPIC_BASE_URL \
-			-u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
-			-u CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR \
-			-u CLAUDE_CODE_USE_BEDROCK \
-			-u CLAUDE_CODE_USE_VERTEX \
-			-u CLAUDE_CODE_USE_FOUNDRY \
-			claude "$@" "${task[@]}"
-		;;
-	codex)
-		export CODEX_HOME="$profile_root/codex"
-		# Docker is Codex's sandbox; exec is its non-interactive mode.
-		local -a codex_mode=(--sandbox danger-full-access)
-		if [ -n "$headless" ]; then codex_mode=(exec --dangerously-bypass-approvals-and-sandbox); fi
-		exec env \
-			-u OPENAI_API_KEY \
-			-u CODEX_API_KEY \
-			-u CODEX_ACCESS_TOKEN \
-			-u OPENAI_BASE_URL \
-			-u OPENAI_IDENTITY_TOKEN_FILE \
-			-u OPENAI_WORKLOAD_IDENTITY_PROVIDER \
-			codex "${codex_mode[@]}" -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"' -c "projects.\"$PWD\".trust_level=\"trusted\"" "${codex_otel[@]}" "$@" "${task[@]}"
-		;;
-	opencode)
-		export OPENCODE_DISABLE_AUTOUPDATE=1
-		exec env \
-			-u OPENCODE_DISABLE_DEFAULT_PLUGINS \
-			-u OPENCODE_CONFIG \
-			-u OPENCODE_CONFIG_CONTENT \
-			opencode "$@" "${task[@]}"
-		;;
-	pi)
-		export PI_CODING_AGENT_DIR="$profile_root/pi" PI_SKIP_VERSION_CHECK=1
-		launch pi "$@" "${task[@]}"
-		;;
-	antigravity)
-		launch agy "$@"
-		;;
-	*)
-		printf 'Unsupported agent: %s\n' "$agent" >&2
-		exit 1
-		;;
-	esac
 }
 
 exec_shell() {
@@ -444,8 +324,12 @@ EOF
 pick_interactive() {
 	local dir_name
 	dir_name="${HEWITT_PROJECT_NAME:-$(basename "$PWD")}"
-	local names=("claude" "codex" "opencode" "pi" "antigravity" "shell")
-	local descs=("new branch" "new branch" "new branch" "new branch" "new branch" "$dir_name")
+	local -a names descs
+	read -r -a names <<<"${HEWITT_AGENTS:-}"
+	names+=("shell")
+	local i
+	for ((i = 0; i < ${#names[@]} - 1; i++)); do descs+=("new branch"); done
+	descs+=("$dir_name")
 	local selected=0
 	local count=${#names[@]}
 	local total_lines=$((count + 1))
@@ -455,7 +339,7 @@ pick_interactive() {
 		if [ "$redraw" = "1" ]; then
 			printf '\033[%dA\r\033[J' "$total_lines" >&2
 		fi
-		printf '%s \033[2m(↑/↓ or 1-4, enter to select, q to close)\033[0m\r\n' "$dir_name" >&2
+		printf '%s \033[2m(↑/↓ or 1-%d, enter to select, q to close)\033[0m\r\n' "$dir_name" "$((count < 9 ? count : 9))" >&2
 		local i
 		for ((i = 0; i < count; i++)); do
 			if [ "$i" -eq "$selected" ]; then
@@ -487,10 +371,12 @@ pick_interactive() {
 				draw_menu 1
 			fi
 			;;
-		[1-6])
-			selected=$((key - 1))
-			draw_menu 1
-			break
+		[1-9])
+			if [ "$key" -le "$count" ]; then
+				selected=$((key - 1))
+				draw_menu 1
+				break
+			fi
 			;;
 		$'\x1b')
 			IFS= read -rsn2 -t 0.1 rest || true
@@ -539,7 +425,7 @@ load_tmux_conf() {
 	done
 	# Preserve imported styling and keybindings. Only the new-window launcher
 	# is owned by Hewitt after loading the user configuration.
-	tmux set-option -g default-command hewitt-agent 2>/dev/null || true
+	tmux set-option -g default-command "$SELF" 2>/dev/null || true
 }
 
 cmd="${1:-}"
@@ -547,24 +433,25 @@ if [ "${HEWITT_HOST_TERMINAL:-}" != "1" ]; then load_tmux_conf; fi
 case "$cmd" in
 install)
 	# Hewitt's installer container: the only writer of the tool cache.
-	ensure_agent "$2" 2>&1
+	install_tool 2>&1
 	;;
-ensure)
-	shift
-	agent="$1"
-	shift
-	ensure_agent "$agent"
-	launch "$(agent_binary "$agent")" "$@"
+launch)
+	# Authentication containers and legacy terminals: the launch as given.
+	launch_args
+	exec_launch
 	;;
 slash)
-	shift
-	slash "$@"
+	slash
 	;;
-run)
-	shift
+run | "")
+	# hewitt-agent run <agent> opens the agent Hewitt chose with HEWITT_LAUNCH;
+	# without one, it asks which agent of the workspace to open.
+	[ "$cmd" = run ] && shift
 	choice="${1:-}"
+	menu=""
 	if [ -z "$choice" ]; then
 		choice="$(pick_interactive)"
+		menu="$choice"
 	fi
 	if [ "$choice" = "shell" ]; then
 		exec_shell
@@ -573,29 +460,11 @@ run)
 	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
 		tmux rename-window "$choice:${HEWITT_PROJECT_NAME:-$(basename "$HEWITT_REPO")}" 2>/dev/null || true
 	fi
-	exec_agent "$choice"
-	;;
-"")
-	choice="$(pick_interactive)"
-	if [ "$choice" = "shell" ]; then
-		exec_shell
-	fi
-	create_worktree_if_needed
-	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
-		tmux rename-window "$choice:${HEWITT_PROJECT_NAME:-$(basename "$HEWITT_REPO")}" 2>/dev/null || true
-	fi
-	exec_agent "$choice"
+	launch_args "$menu"
+	exec_launch
 	;;
 *)
-	ensure_agent "$cmd"
-	shift
-	if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then
-		tries=0
-		while [ "$tries" -lt 20 ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; do
-			sleep 0.05
-			tries=$((tries + 1))
-		done
-	fi
-	launch "$(agent_binary "$cmd")" "$@"
+	printf 'Unknown hewitt-agent command: %s\n' "$cmd" >&2
+	exit 2
 	;;
 esac

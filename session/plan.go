@@ -19,6 +19,7 @@ type settings struct {
 	repo   string
 	danger map[string]bool
 	mounts []mountSpec
+	agents *agent.Registry
 }
 
 type mountSpec struct {
@@ -42,7 +43,11 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 	if err := checkTrust(opts.DataDir, file); err != nil {
 		return settings{}, err
 	}
-	s := settings{Project: file, repo: repo, danger: map[string]bool{}}
+	agents, err := agent.Load(opts.DataDir)
+	if err != nil {
+		return settings{}, err
+	}
+	s := settings{Project: file, repo: repo, danger: map[string]bool{}, agents: agents}
 	for _, value := range []struct {
 		name, value string
 		allowed     []string
@@ -108,11 +113,11 @@ func mergeSettings(opts AgentOptions) (settings, error) {
 		if s.Agent == "workspace" {
 			s.Image = agent.DefaultImage
 		} else {
-			adapter, err := agent.Lookup(s.Agent)
+			m, err := s.agents.Lookup(s.Agent)
 			if err != nil {
 				return settings{}, err
 			}
-			s.Image = adapter.DefaultImage()
+			s.Image = m.ImageFor()
 		}
 	}
 	for _, spec := range s.Mounts {
@@ -357,8 +362,10 @@ func (s settings) resolveSource(path, base string) (string, error) {
 	return "", fmt.Errorf("mount source %q follows a symlink to %q; mount the real path or add danger: [symlinks]", path, real)
 }
 
-// hostMounts resolves MOUNT lines and agent rules before any workspace exists.
-func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) {
+// hostMounts resolves the hewitt.yml mounts and, for agent a, its rules,
+// mounted over the client's configuration in the profile at root, before
+// any workspace exists.
+func (s settings) hostMounts(a *agent.Manifest, root string) ([]docker.BindMount, error) {
 	var mounts []docker.BindMount
 	for _, m := range s.mounts {
 		src, err := s.resolveSource(m.src, s.Dir)
@@ -371,7 +378,7 @@ func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) 
 		}
 		mounts = append(mounts, docker.BindMount{Source: src, Target: dst, ReadOnly: m.readOnly})
 	}
-	if adapter == nil {
+	if a == nil {
 		return mounts, nil
 	}
 	rules, base := s.Rules, s.Dir
@@ -381,7 +388,7 @@ func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) 
 	if rules == "" {
 		// By convention, the project keeps agent-specific rules in .hewitt/<agent>.
 		base = s.repo
-		rules = filepath.Join(base, ".hewitt", adapter.Name())
+		rules = filepath.Join(base, ".hewitt", a.Name)
 		if _, err := os.Lstat(rules); os.IsNotExist(err) {
 			return mounts, nil
 		}
@@ -395,7 +402,7 @@ func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) 
 		return nil, fmt.Errorf("rules: %w", err)
 	}
 	if !info.IsDir() {
-		return append(mounts, docker.BindMount{Source: real, Target: adapter.InstructionFile(), ReadOnly: true}), nil
+		return append(mounts, docker.BindMount{Source: real, Target: a.InstructionPath(root), ReadOnly: true}), nil
 	}
 	entries, err := os.ReadDir(real)
 	if err != nil {
@@ -404,7 +411,7 @@ func (s settings) hostMounts(adapter agent.Adapter) ([]docker.BindMount, error) 
 	// Each entry is mounted read-only over the client's configuration directory,
 	// so credentials and other profile state stay in the shared profile.
 	for _, entry := range entries {
-		mounts = append(mounts, docker.BindMount{Source: filepath.Join(real, entry.Name()), Target: adapter.ConfigDir() + "/" + entry.Name(), ReadOnly: true})
+		mounts = append(mounts, docker.BindMount{Source: filepath.Join(real, entry.Name()), Target: a.ConfigPath(root) + "/" + entry.Name(), ReadOnly: true})
 	}
 	return mounts, nil
 }

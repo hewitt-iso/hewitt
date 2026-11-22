@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
 	"github.com/hewitt-iso/hewitt/gateway"
 	"github.com/hewitt-iso/hewitt/profile"
@@ -46,16 +47,10 @@ const (
 	// DefaultEgressImage is the gateway image, published with the workspace
 	// image; make image-egress builds it locally under the same tag.
 	DefaultEgressImage = "ghcr.io/hewitt-iso/egress:latest"
-	// claudePlaceholder is the token agents hold; the gateway replaces it with
-	// the saved token in requests to Anthropic.
-	claudePlaceholder = "sk-ant-oat01-hewitt-gateway-managed"
 	// gatewayCA is where agent containers find the certificate that signs the
 	// gateway's certificates for injected hosts.
 	gatewayCA = "/hewitt/gateway-ca.crt"
 )
-
-// claudeHosts are the Anthropic API hosts whose requests carry the token.
-var claudeHosts = []string{"api.anthropic.com"}
 
 // proxyEnv points clients at the gateway; both spellings are common. Claude
 // Code trusts the gateway's CA through NODE_EXTRA_CA_CERTS. An open gateway
@@ -98,15 +93,11 @@ func caDir(dataDir string) string { return filepath.Join(dataDir, "gateway-ca") 
 // other hosts wait for approval. Every gateway replaces the Claude
 // placeholder with the token saved for profileID. Nothing is started; on
 // failure, created resources are reported.
-func createGateway(ctx context.Context, dataDir, image, profileID string, open bool, hosts []string) (Egress, error) {
+func createGateway(ctx context.Context, dataDir, image, profileID string, open bool, hosts []string, agents []agent.Manifest) (Egress, error) {
 	if !open {
 		if _, err := gateway.ParseRules(hosts); err != nil {
 			return Egress{}, err
 		}
-	}
-	secrets, err := profile.PrepareSecrets(dataDir, "claude", profileID)
-	if err != nil {
-		return Egress{}, err
 	}
 	if err := gateway.EnsureCA(caDir(dataDir)); err != nil {
 		return Egress{}, err
@@ -116,10 +107,25 @@ func createGateway(ctx context.Context, dataDir, image, profileID string, open b
 	if err := os.MkdirAll(e.StateDir(), 0o700); err != nil {
 		return e, fmt.Errorf("create gateway configuration: %w", err)
 	}
-	cfg := gateway.Config{
-		Listen: "0.0.0.0:" + egressPort, Open: open, CADir: "/hewitt/ca", StateDir: "/hewitt/state",
-		Inject: []gateway.Injection{{Hosts: claudeHosts, Placeholder: claudePlaceholder,
-			TokenFile: "/hewitt/secrets/claude/token.env", Variable: "CLAUDE_CODE_OAUTH_TOKEN"}},
+	cfg := gateway.Config{Listen: "0.0.0.0:" + egressPort, Open: open, CADir: "/hewitt/ca", StateDir: "/hewitt/state"}
+	mounts := []docker.BindMount{
+		{Source: filepath.Join(e.ConfigDir, "config.json"), Target: "/hewitt/gateway/config.json", ReadOnly: true},
+		{Source: e.StateDir(), Target: "/hewitt/state"},
+		{Source: caDir(dataDir), Target: "/hewitt/ca", ReadOnly: true},
+	}
+	// Only the gateway mounts the saved tokens it puts into requests.
+	for _, a := range agents {
+		if a.Token == nil || len(a.Token.Hosts) == 0 {
+			continue
+		}
+		secrets, err := profile.PrepareSecrets(dataDir, a.Name, profileID)
+		if err != nil {
+			return e, err
+		}
+		dir := "/hewitt/secrets/" + a.Name
+		mounts = append(mounts, docker.BindMount{Source: secrets, Target: dir, ReadOnly: true})
+		cfg.Inject = append(cfg.Inject, gateway.Injection{Hosts: a.Token.Hosts, Placeholder: a.Token.Placeholder,
+			TokenFile: dir + "/token.env", Variable: a.Token.Variable})
 	}
 	if !open {
 		cfg.Allow = hosts
@@ -137,13 +143,8 @@ func createGateway(ctx context.Context, dataDir, image, profileID string, open b
 	}
 	proxy, err := client.Create(ctx, docker.CreateOptions{
 		Image: image, Entrypoint: "hewitt", Command: []string{"gateway", "/hewitt/gateway/config.json"},
-		Mounts: []docker.BindMount{
-			{Source: filepath.Join(e.ConfigDir, "config.json"), Target: "/hewitt/gateway/config.json", ReadOnly: true},
-			{Source: e.StateDir(), Target: "/hewitt/state"},
-			{Source: caDir(dataDir), Target: "/hewitt/ca", ReadOnly: true},
-			{Source: secrets, Target: "/hewitt/secrets/claude", ReadOnly: true},
-		},
-		User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), Workdir: "/tmp",
+		Mounts: mounts,
+		User:   fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), Workdir: "/tmp",
 		ReadOnlyRoot: true, DisableTTY: true,
 	})
 	if err != nil {

@@ -25,11 +25,11 @@ func observerToken() string { return strings.ToLower(rand.Text()) }
 // held. The observer starts as root with CAP_SYS_ADMIN, CAP_SYS_PTRACE, and
 // CAP_DAC_READ_SEARCH in the host PID namespace only to find the container
 // and set its marks, then runs as the user; it has no network.
-func createObserver(ctx context.Context, image string, e *Egress, token string) error {
+func createObserver(ctx context.Context, image string, e *Egress, token string, agents []string) error {
 	cfg := observer.Config{Token: token, UID: os.Getuid(), GID: os.Getgid(), StateDir: "/hewitt/state",
 		Watches: []observer.Watch{{Path: volumeRoot}}}
-	for _, name := range agent.Names {
-		cfg.Watches = append(cfg.Watches, observer.Watch{Path: "/hewitt/profiles/" + name, Owner: name})
+	for _, name := range agents {
+		cfg.Watches = append(cfg.Watches, observer.Watch{Path: agent.ProfilesPath + "/" + name, Owner: name})
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

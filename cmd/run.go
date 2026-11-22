@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/hewitt-iso/hewitt/agent"
@@ -41,7 +40,7 @@ func newAgentCommand(action string, cfg *config.Config) *cobra.Command {
 		Use: action + " <agent>", Short: short,
 		Long:      short + ".\n\nAll agents use ghcr.io/hewitt-iso/hewitt:latest by default (hewitt.yml image applies to run only).\nSupported adapters: claude, codex, opencode, pi, antigravity. Planned agents: gemini, copilot.\nRun images must contain tmux, env and the selected CLI on PATH and support the host UID/GID.\nA dedicated profile is mounted; no host credentials are imported.\nLogin requires an interactive terminal. Containers and profiles are preserved.\nContainers may share a profile; login/logout affects that profile. Run attaches by default; use --detach to start in the background.\nPress Ctrl-B, D to detach; hewitt attach reconnects to the same terminal. Ctrl-C and Ctrl-D are handled by the agent.\nRun keeps the session repository in a Docker volume; the host repository is only read.\nhewitt sync imports the session branches as hewitt/<name>/<branch>.",
 		Example:   "  hewitt " + exampleAction + " codex --profile personal",
-		ValidArgs: append(slices.Clone(agent.Names), "gemini", "copilot"),
+		ValidArgs: append(builtinNames(), "gemini", "copilot"),
 		Args:      cobra.MatchAll(requireAgent, cobra.MaximumNArgs(1), validAgent),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("image") && image == "" {
@@ -133,17 +132,23 @@ func requireAgent(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// validAgent names the supported agents instead of Cobra's bare "invalid argument".
+// validAgent refuses arguments that cannot name an agent, such as session
+// IDs, instead of Cobra's bare "invalid argument". Whether a manifest
+// describes the agent is known once the configuration is loaded.
 func validAgent(cmd *cobra.Command, args []string) error {
-	if len(args) == 0 || slices.Contains(cmd.ValidArgs, args[0]) {
+	if len(args) == 0 || agent.ValidName(args[0]) && !looksLikeID(args[0]) {
 		return nil
 	}
-	return &unknownAgentError{Name: args[0], Supported: agent.Names}
+	return &unknownAgentError{Name: args[0], Supported: builtinNames()}
 }
 
 func executeRun(cmd *cobra.Command, cfg *config.Config, opts session.AgentOptions, detach bool) error {
 	if opts.Agent == "" && !opts.Shell && !detach && isInteractive(cmd) {
-		choice, err := pickAgent(cmd.InOrStdin(), cmd.ErrOrStderr())
+		agents, err := agent.Load(cfg.DataDir)
+		if err != nil {
+			return err
+		}
+		choice, err := pickAgent(cmd.InOrStdin(), cmd.ErrOrStderr(), agents.Names())
 		if err != nil {
 			return err
 		}

@@ -6,13 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/hewitt-iso/hewitt/agent"
 )
 
 func testMetadata() Metadata {
@@ -130,7 +127,7 @@ func TestStoreValidation(t *testing.T) {
 	for _, change := range []func(*Metadata){
 		func(m *Metadata) { m.Profile = "../escape" },
 		func(m *Metadata) { m.Operation = "unknown" },
-		func(m *Metadata) { m.Agent = "unknown" },
+		func(m *Metadata) { m.Agent = "Unknown agent" },
 		func(m *Metadata) { m.Image = "" },
 		func(m *Metadata) { m.Image = "bad\nimage" },
 		func(m *Metadata) { m.Name = "bad\tname" },
@@ -247,7 +244,7 @@ func TestInvalidUpdatePreservesRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalid := m
-	invalid.Agent = "unknown"
+	invalid.Agent = "Unknown agent"
 	if err := s.Save(invalid); err == nil {
 		t.Fatal("Save accepted invalid update")
 	}
@@ -342,7 +339,7 @@ func TestStoreResolve(t *testing.T) {
 
 func TestStoreAcceptsEveryAdapter(t *testing.T) {
 	s := testStore(t)
-	for _, name := range append(slices.Clone(agent.Names), "workspace") {
+	for _, name := range []string{"claude", "codex", "opencode", "pi", "antigravity", "workspace"} {
 		m := testMetadata()
 		m.Agent = name
 		if err := s.Save(m); err != nil {

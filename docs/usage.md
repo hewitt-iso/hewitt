@@ -14,7 +14,7 @@ make build
 ```
 
 In a terminal, `hewitt` opens a selector for Claude, Codex, OpenCode, Pi,
-Antigravity, or a project shell. Select with arrow keys or a number, then Enter;
+Antigravity, the agents of your own [manifests](agents.md), or a project shell. Select with arrow keys or a number, then Enter;
 press Q or Ctrl-C to cancel before workspace setup starts. Open `hewitt` in
 another host tmux window to choose another agent in the same workspace container.
 First-time users complete the optional 3-step onboarding flow first.
@@ -80,7 +80,7 @@ make images  # builds hewitt:local and hewitt-egress:local
 make image-hewitt
 ```
 
-Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`) are installed on demand
+Agents (`claude`, `codex`, `opencode`, `pi`, `antigravity`, and [your own](agents.md)) are installed on demand
 into the shared tool cache `<data_dir>/tools`. Agent and login containers mount
 it read-only at `/hewitt/tools`, so a session cannot replace executables that
 later sessions of any project run. Before launching an agent that is missing
@@ -92,10 +92,10 @@ held only while one runs; agents already in the cache start in parallel without
 it. The installer moves each executable into place last, so running agents keep
 their binary and later runs use the new one. The workspace container keeps
 running during installation. An agent chosen inside a container, such as from
-a legacy tmux window's picker, must already be in the cache; otherwise
-`hewitt-agent` names the `hewitt run <agent>` command that installs it. Images
-without `hewitt-agent install` cannot install agents; the default image is
-refreshed automatically.
+a legacy tmux window's picker, must already be in the cache; otherwise it
+fails to start, and `hewitt run <agent>` on the host installs it. Hewitt
+installs agents with its own `hewitt-agent`, so any image with Bash, curl, and
+npm can install them; the default image is refreshed automatically.
 
 Start each agent in its own host terminal tab or tmux window:
 

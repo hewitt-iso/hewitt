@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
 	"github.com/hewitt-iso/hewitt/profile"
 )
@@ -18,26 +19,18 @@ import (
 // later sessions of any project run; only installer containers write to it.
 const toolsPath = "/hewitt/tools"
 
-// toolBinary maps an agent name to its executable in the tool cache.
-func toolBinary(agent string) string {
-	if agent == "antigravity" {
-		return "agy"
-	}
-	return agent
-}
-
 // ensureTool installs agent into the shared tool cache unless its executable
 // is already there. Installed agents need no lock, so any number of runs can
 // start in parallel; installations are serialized and checked again under the
 // lock, so concurrent runs never write the same files twice. The installer has
 // network access but no project, profile, or credentials, and it is removed
 // after it exits.
-func ensureTool(ctx context.Context, dataDir, image, agent string, stderr io.Writer) error {
+func ensureTool(ctx context.Context, dataDir, image string, a agent.Manifest, stderr io.Writer) error {
 	tools, err := profile.PrepareTools(dataDir)
 	if err != nil {
 		return err
 	}
-	if toolInstalled(tools, agent) {
+	if toolInstalled(tools, a.Binary) {
 		return nil
 	}
 	unlock, err := lockTools(ctx, dataDir, stderr)
@@ -45,21 +38,25 @@ func ensureTool(ctx context.Context, dataDir, image, agent string, stderr io.Wri
 		return err
 	}
 	defer unlock()
-	if toolInstalled(tools, agent) {
+	if toolInstalled(tools, a.Binary) {
 		return nil
 	}
-	if err := reportStep(stderr, "Installing "+agent+" into the tool cache"); err != nil {
+	if err := reportStep(stderr, "Installing "+a.Name+" into the tool cache"); err != nil {
+		return err
+	}
+	script, path, err := agentScript(dataDir)
+	if err != nil {
 		return err
 	}
 	opts := docker.CreateOptions{
-		Image: image, Entrypoint: "hewitt-agent", Command: []string{"install", agent},
+		Image: image, Entrypoint: path, Command: []string{"install"}, Env: a.InstallEnv(),
 		User:   fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		Mounts: []docker.BindMount{{Source: tools, Target: toolsPath}},
+		Mounts: []docker.BindMount{{Source: tools, Target: toolsPath}, script},
 		// Installer output is progress for the user, not command output.
 		DisableLogs: true, DisableTTY: true,
 	}
 	if err := (docker.Client{}).Run(ctx, opts, stderr); err != nil {
-		return fmt.Errorf("install %s: %w", agent, err)
+		return fmt.Errorf("install %s: %w", a.Name, err)
 	}
 	return nil
 }
@@ -67,8 +64,8 @@ func ensureTool(ctx context.Context, dataDir, image, agent string, stderr io.Wri
 // toolInstalled reports whether the cache has the agent's executable. The
 // installer moves it into place last, so its presence means a complete
 // installation. Links are not followed: they name container paths.
-func toolInstalled(tools, agent string) bool {
-	_, err := os.Lstat(filepath.Join(tools, "bin", toolBinary(agent)))
+func toolInstalled(tools, binary string) bool {
+	_, err := os.Lstat(filepath.Join(tools, "bin", binary))
 	return err == nil
 }
 

@@ -3,12 +3,15 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hewitt-iso/hewitt/agent"
 )
 
 // fakeToolsDocker records each Docker call on one line and creates containers.
@@ -34,6 +37,20 @@ esac
 		t.Fatal(err)
 	}
 	return log
+}
+
+// builtin returns a built-in agent manifest.
+func builtin(t *testing.T, name string) agent.Manifest {
+	t.Helper()
+	r, err := agent.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := r.Lookup(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
 
 func calls(t *testing.T, log string) []string {
@@ -78,8 +95,13 @@ func TestAgentContainersMountToolCacheReadOnly(t *testing.T) {
 				t.Errorf("agent container mounts a writable tool cache: %s", call)
 			}
 		case strings.HasPrefix(call, "container run --rm "):
-			_, agent, _ := strings.Cut(call, " agent:test install ")
-			installs[agent] = true
+			_, spec, _ := strings.Cut(call, "--env HEWITT_INSTALL=")
+			spec, _, _ = strings.Cut(spec, " ")
+			raw, _ := base64.StdEncoding.DecodeString(spec)
+			args := strings.Split(string(raw), "\x00")
+			if len(args) > 1 && strings.HasSuffix(call, " agent:test install") {
+				installs[args[1]] = true
+			}
 			if strings.Contains(call, ",dst=/hewitt/tools,readonly") {
 				t.Errorf("installer cannot write the tool cache: %s", call)
 			}
@@ -114,7 +136,7 @@ func TestEnsureToolSkipsInstalledAgentWithoutLock(t *testing.T) {
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := ensureTool(ctx, data, "agent:test", "antigravity", io.Discard); err != nil {
+	if err := ensureTool(ctx, data, "agent:test", builtin(t, "antigravity"), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls(t, log); got[0] != "" {
@@ -131,7 +153,8 @@ func TestConcurrentInstallsRunOnce(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	done := make(chan error, 1)
-	go func() { done <- ensureTool(context.Background(), data, "agent:test", "codex", &stderr) }()
+	codex := builtin(t, "codex")
+	go func() { done <- ensureTool(context.Background(), data, "agent:test", codex, &stderr) }()
 	time.Sleep(200 * time.Millisecond)
 	select {
 	case err := <-done:

@@ -69,7 +69,7 @@ type missingAgentError struct{ Command string }
 
 func (*missingAgentError) Error() string { return "no agent specified" }
 func (e *missingAgentError) Hint() string {
-	return fmt.Sprintf("pass an agent, for example %s codex (supported: %s)", e.Command, strings.Join(agent.Names, ", "))
+	return fmt.Sprintf("pass an agent, for example %s codex (supported: %s)", e.Command, strings.Join(builtinNames(), ", "))
 }
 
 // missingSessionError is a session command run without a terminal for the picker.
@@ -113,3 +113,13 @@ func (e *ambiguousAgentError) Error() string {
 }
 
 func (*ambiguousAgentError) Hint() string { return "pass one of these IDs to hewitt attach" }
+
+// builtinNames lists the agents compiled into Hewitt, for messages shown
+// before the configuration, and so the user's agents, is loaded.
+func builtinNames() []string {
+	var names []string
+	for _, a := range agent.Builtin() {
+		names = append(names, a.Name)
+	}
+	return names
+}

@@ -37,7 +37,7 @@ if [ "$1 $2" = "volume inspect" ]; then printf 'Error: No such volume\n' >&2; ex
 case "$2" in
 create) printf '%s\n' '` + containerID + `' ;;
 exec) case "$*" in
- *'hewitt-agent run'*) printf 'workspace opened' ;;
+ *'/hewitt/agent/hewitt-agent-'*' run'*) printf 'workspace opened' ;;
 esac ;;
 esac
 `

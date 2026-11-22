@@ -1,0 +1,44 @@
+# OpenCode with its native provider logins (opencode auth login), such as
+# GitHub Copilot or ChatGPT, or provider keys from an env file. Its
+# credentials live in XDG_DATA_HOME/opencode/auth.json, inside the profile.
+# Disabling default plugins would hide the built-in subscription logins.
+version: 1
+name: opencode
+binary: opencode
+install:
+  npm: opencode-ai
+  version: latest
+env:
+  OPENCODE_DISABLE_AUTOUPDATE: "1"
+unset_env:
+  - ANTHROPIC_API_KEY
+  - OPENAI_API_KEY
+  - GEMINI_API_KEY
+  - GOOGLE_GENERATIVE_AI_API_KEY
+  - OPENROUTER_API_KEY
+  - XAI_API_KEY
+  - GITHUB_TOKEN
+  - GITLAB_TOKEN
+  - OPENCODE_DISABLE_DEFAULT_PLUGINS
+  - OPENCODE_CONFIG
+  - OPENCODE_CONFIG_CONTENT
+commands:
+  run: []
+  login: [auth, login]
+  status: [auth, list]
+  logout: [auth, logout]
+task:
+  interactive: ["--prompt={prompt}"]
+  headless: [run, --, "{prompt}"]
+config_dir: "{profile}/config/opencode"
+instructions: "{profile}/config/opencode/AGENTS.md"
+hosts:
+  - opencode.ai
+  - models.dev
+  - github.com
+  - api.github.com
+  - "*.githubcopilot.com"
+  - api.openai.com
+  - chatgpt.com
+  - auth.openai.com
+herdr: opencode

@@ -1,0 +1,54 @@
+# Pi (pi.dev) logs in only through its /login command, which Hewitt types
+# into its interface. Credentials live in PI_CODING_AGENT_DIR, inside the
+# profile, as auth.json (0600).
+version: 1
+name: pi
+binary: pi
+install:
+  npm: "@earendil-works/pi-coding-agent"
+  version: latest
+  scripts: false
+env:
+  PI_CODING_AGENT_DIR: "{profile}/pi"
+  PI_SKIP_VERSION_CHECK: "1"
+unset_env:
+  - ANTHROPIC_API_KEY
+  - ANTHROPIC_OAUTH_TOKEN
+  - OPENAI_API_KEY
+  - GEMINI_API_KEY
+  - OPENROUTER_API_KEY
+  - XAI_API_KEY
+  - GROQ_API_KEY
+  - MISTRAL_API_KEY
+  - COPILOT_GITHUB_TOKEN
+  - GH_TOKEN
+  - GITHUB_TOKEN
+  - PI_CODING_AGENT_SESSION_DIR
+commands:
+  run: []
+  login: {slash: /login}
+  status: [--list-models]
+  logout: {slash: /logout}
+task:
+  interactive: [--, "{prompt}"]
+  headless: [-p, --, "{prompt}"]
+config_dir: "{profile}/pi"
+instructions: "{profile}/pi/AGENTS.md"
+hosts:
+  - registry.npmjs.org
+  - github.com
+  - api.github.com
+  - objects.githubusercontent.com
+  - api.anthropic.com
+  - claude.ai
+  - console.anthropic.com
+  - api.openai.com
+  - auth.openai.com
+  - chatgpt.com
+  - "*.githubcopilot.com"
+  - accounts.google.com
+  - oauth2.googleapis.com
+  - www.googleapis.com
+  - cloudcode-pa.googleapis.com
+  - generativelanguage.googleapis.com
+herdr: pi

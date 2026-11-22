@@ -19,9 +19,6 @@ import (
 
 var herdrPane = regexp.MustCompile(`^w[0-9]+:p[0-9]+$`)
 
-// herdrKinds maps Hewitt agents to Herdr's agent kinds.
-var herdrKinds = map[string]string{"claude": "claude", "codex": "codex", "opencode": "opencode", "pi": "pi", "antigravity": "agy"}
-
 func validHerdr(socket, pane string) error {
 	if !strings.HasPrefix(socket, "/") || strings.ContainsAny(socket, "\x00\r\n") || !herdrPane.MatchString(pane) {
 		return fmt.Errorf("invalid Herdr pane location")
@@ -43,10 +40,10 @@ func currentHerdr() (Location, bool) {
 }
 
 // AgentHint is the environment that lets the terminal manager of pane l
-// recognize agent behind the Docker CLI; it is empty outside Herdr.
-func AgentHint(l Location, agent string) []string {
-	kind, ok := herdrKinds[agent]
-	if l.HerdrPane == "" || !ok {
+// recognize an agent of Herdr's kind behind the Docker CLI; it is empty
+// outside Herdr and for agents Herdr does not know.
+func AgentHint(l Location, kind string) []string {
+	if l.HerdrPane == "" || kind == "" {
 		return nil
 	}
 	return []string{"HERDR_AGENT=" + kind}

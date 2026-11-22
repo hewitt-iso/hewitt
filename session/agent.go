@@ -22,8 +22,8 @@ import (
 )
 
 // AgentOptions describes one native client invocation. Run images must contain
-// Git, sh, sleep, and hewitt-agent on PATH for volume runs; legacy modes also
-// require tmux. Images must support execution as the invoking host UID/GID.
+// Git, bash, sleep, and base64 for volume runs; Hewitt mounts its own
+// hewitt-agent. Legacy modes also require tmux. Images must support execution as the invoking host UID/GID.
 // Empty run settings fall back to hewitt.yml, then to defaults.
 type AgentOptions struct {
 	Agent, Image, Name, Profile, DataDir string
@@ -63,7 +63,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		return "", err
 	}
 	if s.Agent != "workspace" {
-		if _, err := agent.Lookup(s.Agent); err != nil {
+		if _, err := s.agents.Lookup(s.Agent); err != nil {
 			return "", err
 		}
 	}
@@ -98,32 +98,29 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if s.Mode == "exec" {
 		return runExternal(ctx, opts.DataDir, s, stderr)
 	}
-	var adapter agent.Adapter
+	var chosen *agent.Manifest
 	if s.Agent != "workspace" {
-		adapter, err = agent.Lookup(s.Agent)
+		m, err := s.agents.Lookup(s.Agent)
 		if err != nil {
 			return "", err
 		}
+		chosen = &m
 	}
 	// Resolve every host path before creating a workspace or container.
 	if err := reportStep(stderr, "Checking mounts and credential configuration"); err != nil {
 		return "", err
 	}
-	extra, err := s.hostMounts(adapter)
+	extra, err := s.hostMounts(chosen, agent.ProfilePath)
 	if err != nil {
 		return "", err
 	}
 	if key != "" {
-		for _, name := range agent.Names {
-			a, _ := agent.Lookup(name)
-			mounts, err := s.hostMounts(a)
+		for _, a := range s.agents.All() {
+			mounts, err := s.hostMounts(&a, agent.ProfilesPath+"/"+a.Name)
 			if err != nil {
 				return "", err
 			}
-			for _, mount := range mounts[len(s.mounts):] {
-				mount.Target = strings.Replace(mount.Target, agent.ProfilePath, "/hewitt/profiles/"+name, 1)
-				extra = append(extra, mount)
-			}
+			extra = append(extra, mounts[len(s.mounts):]...)
 		}
 	}
 	envFile, envKeys, err := s.envFile()
@@ -135,7 +132,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if key != "" {
 		// Reuse only after validating host mounts and the credential env file.
 		if !opts.Separate {
-			id, old, err := reuseWorkspace(ctx, opts.DataDir, key, stderr)
+			id, old, err := reuseWorkspace(ctx, opts.DataDir, key, s.agents.Names(), stderr)
 			if id != "" || err != nil {
 				return id, err
 			}
@@ -159,9 +156,9 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if err != nil {
 		return "", err
 	}
-	if s.Agent != "workspace" {
+	if chosen != nil {
 		// Legacy terminals start the agent at once; install it before creating anything.
-		if err := ensureTool(ctx, opts.DataDir, create.Image, s.Agent, stderr); err != nil {
+		if err := ensureTool(ctx, opts.DataDir, create.Image, *chosen, stderr); err != nil {
 			return "", err
 		}
 	}
@@ -169,14 +166,13 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 	if envFile != "" {
 		create.EnvFiles = append(create.EnvFiles, envFile)
 	}
-	create.Command = agent.Invocation{Args: create.Command}.Allow(envKeys...).Args
 	store, err := NewStore(opts.DataDir)
 	if err != nil {
 		return "", err
 	}
 	m := Metadata{Agent: s.Agent, Image: s.Image, Name: s.Name, Profile: s.Profile, Operation: "run", Terminal: "tmux", Mode: s.Mode, Isolation: s.Isolation, WorkspaceKey: key}
 	if key != "" {
-		m.Terminal = "host"
+		m.Terminal, m.Agents, m.MountsAgent = "host", s.agents.Names(), true
 	}
 	if s.Mode == "sidecar" {
 		m.Container = s.Target
@@ -313,13 +309,11 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		}
 		var hosts, allow []string
 		if s.egress() {
-			if adapter != nil {
-				hosts = append(hosts, adapter.Hosts()...)
+			if chosen != nil {
+				hosts = append(hosts, chosen.Hosts...)
 			} else {
-				for _, name := range agent.Names {
-					if a, err := agent.Lookup(name); err == nil {
-						hosts = append(hosts, a.Hosts()...)
-					}
+				for _, a := range s.agents.All() {
+					hosts = append(hosts, a.Hosts...)
 				}
 			}
 			allow = s.Allow
@@ -330,7 +324,7 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 		if err := reportStep(stderr, "Preparing network and gateway"); err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
-		e, err := createGateway(ctx, opts.DataDir, image, s.Profile, !s.egress(), append(hosts, allow...))
+		e, err := createGateway(ctx, opts.DataDir, image, s.Profile, !s.egress(), append(hosts, allow...), s.agents.All())
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
@@ -354,24 +348,38 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 			// Agents share the container and its UID, so the observer tells
 			// them apart and holds access to each other's logins.
 			token := observerToken()
-			if err := createObserver(ctx, image, &e, token); err != nil {
+			if err := createObserver(ctx, image, &e, token, s.agents.Names()); err != nil {
 				return "", fmt.Errorf("%s: %w", preserved, err)
 			}
 			preserved += fmt.Sprintf("; observer %q preserved", e.Observer)
 			create.Env = append(create.Env, "HEWITT_OBSERVE="+token)
 		}
 	}
-	if adapter != nil && adapter.TokenVariable() != "" {
+	if chosen != nil {
 		// A legacy terminal starts the agent with the container, so its
-		// credential is chosen now: a placeholder behind a gateway, the token
-		// itself on a network the gateway does not serve.
-		env, files, err := agentToken(opts.DataDir, s.Profile, adapter.Name(), m.Egress != nil)
+		// command line and credential are chosen now: a placeholder behind a
+		// gateway, the token itself on a network the gateway does not serve.
+		allow := envKeys
+		if chosen.Token != nil {
+			env, files, err := agentToken(opts.DataDir, s.Profile, *chosen, m.Egress != nil)
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", preserved, err)
+			}
+			create.Env = append(create.Env, env...)
+			create.EnvFiles = append(create.EnvFiles, files...)
+			allow = append(slices.Clone(allow), chosen.Token.Variable)
+		}
+		launch, err := chosen.Launch(agent.OpRun, agent.LaunchOptions{Profile: agent.ProfilePath, Telemetry: s.Telemetry, Allow: allow})
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", preserved, err)
 		}
-		create.Env = append(create.Env, env...)
-		create.EnvFiles = append(create.EnvFiles, files...)
-		create.Command = agent.Invocation{Args: create.Command}.Allow(adapter.TokenVariable()).Args
+		create.Env = append(create.Env, launch.Env()...)
+		// New tmux windows open hewitt-agent's menu of every agent.
+		menu, err := menuEnv(s.agents, s.agents.Names(), s.Telemetry, envKeys)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", preserved, err)
+		}
+		create.Env = append(create.Env, menu...)
 	}
 	if s.SSH {
 		mount, err := sshAgentMount()
@@ -438,7 +446,13 @@ func RunAgent(ctx context.Context, opts AgentOptions, stderr io.Writer) (string,
 // container's own user, filesystem, network, and client state apply; no profile
 // is mounted. The session ID is random because one container may host several.
 func runExternal(ctx context.Context, dataDir string, s settings, stderr io.Writer) (string, error) {
-	adapter, err := agent.Lookup(s.Agent)
+	a, err := s.agents.Lookup(s.Agent)
+	if err != nil {
+		return "", err
+	}
+	// Profile environment is omitted: the external container has no profile
+	// mount, and no hewitt-agent runs the client there.
+	launch, err := a.Launch(agent.OpRun, agent.LaunchOptions{Workdir: s.Workdir})
 	if err != nil {
 		return "", err
 	}
@@ -459,9 +473,7 @@ func runExternal(ctx context.Context, dataDir string, s settings, stderr io.Writ
 	if err := store.Save(m); err != nil {
 		return "", fmt.Errorf("record session for container %q (agent not started): %w", s.Target, err)
 	}
-	// Profile environment is omitted: the external container has no profile mount.
-	inv := adapter.Run()
-	command := append([]string{inv.Entrypoint}, inv.Args...)
+	command := launch.Argv
 	if err := reportStep(stderr, "Starting agent in target container"); err != nil {
 		return "", err
 	}
@@ -482,12 +494,16 @@ func Login(ctx context.Context, opts AgentOptions, in io.Reader, out, stderr io.
 // credential operation. Relogin runs logout and then login, each in its own
 // container, and stops if logout fails. Containers and profiles are preserved.
 func Authenticate(ctx context.Context, opts AgentOptions, operation string, in io.Reader, out, stderr io.Writer) error {
-	adapter, err := agent.Lookup(opts.Agent)
+	agents, err := agent.Load(opts.DataDir)
+	if err != nil {
+		return err
+	}
+	a, err := agents.Lookup(opts.Agent)
 	if err != nil {
 		return err
 	}
 	if opts.Image == "" {
-		opts.Image = adapter.DefaultImage()
+		opts.Image = a.ImageFor()
 	}
 	if err := (docker.CreateOptions{Image: opts.Image, Name: opts.Name}).Validate(); err != nil {
 		return err
@@ -500,18 +516,18 @@ func Authenticate(ctx context.Context, opts AgentOptions, operation string, in i
 	}
 	switch operation {
 	case "login", "status", "logout":
-		return runAuthentication(ctx, opts, adapter, operation, in, out, stderr)
+		return runAuthentication(ctx, opts, a, operation, in, out, stderr)
 	case "relogin":
 		if err := reportStep(stderr, fmt.Sprintf("Relogin 1/2: logging out of %s (profile %s)", opts.Agent, opts.Profile)); err != nil {
 			return err
 		}
-		if err := runAuthentication(ctx, opts, adapter, "logout", in, out, stderr); err != nil {
+		if err := runAuthentication(ctx, opts, a, "logout", in, out, stderr); err != nil {
 			return fmt.Errorf("relogin: logout: %w", err)
 		}
 		if err := reportStep(stderr, fmt.Sprintf("Relogin 2/2: logging in to %s (profile %s)", opts.Agent, opts.Profile)); err != nil {
 			return err
 		}
-		if err := runAuthentication(ctx, opts, adapter, "login", in, out, stderr); err != nil {
+		if err := runAuthentication(ctx, opts, a, "login", in, out, stderr); err != nil {
 			return fmt.Errorf("relogin: login: %w", err)
 		}
 		return nil
@@ -522,12 +538,12 @@ func Authenticate(ctx context.Context, opts AgentOptions, operation string, in i
 
 // runAuthentication runs one native login, status, or logout in a new
 // container and keeps a long-lived token file in step with it.
-func runAuthentication(ctx context.Context, opts AgentOptions, adapter agent.Adapter, operation string, in io.Reader, out, stderr io.Writer) error {
+func runAuthentication(ctx context.Context, opts AgentOptions, a agent.Manifest, operation string, in io.Reader, out, stderr io.Writer) error {
 	create, dir, err := prepare(ctx, opts, operation)
 	if err != nil {
 		return err
 	}
-	if err := ensureTool(ctx, opts.DataDir, create.Image, opts.Agent, stderr); err != nil {
+	if err := ensureTool(ctx, opts.DataDir, create.Image, a, stderr); err != nil {
 		return err
 	}
 	store, err := NewStore(opts.DataDir)
@@ -545,8 +561,8 @@ func runAuthentication(ctx context.Context, opts AgentOptions, adapter agent.Ada
 	if err := (docker.Client{}).StartAttached(ctx, id, in, out, stderr); err != nil {
 		return err
 	}
-	// Clients without a token variable keep their login in their own files.
-	if adapter.TokenVariable() == "" {
+	// Clients without a token keep their login in their own files.
+	if a.Token == nil {
 		return nil
 	}
 	switch operation {
@@ -555,7 +571,7 @@ func runAuthentication(ctx context.Context, opts AgentOptions, adapter agent.Ada
 		if err != nil {
 			return err
 		}
-		return profile.SaveToken(dir, adapter.TokenVariable(), token)
+		return profile.SaveToken(dir, a.Token.Variable, token)
 	case "logout":
 		return profile.RemoveToken(dir)
 	}
@@ -589,12 +605,20 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err := ctx.Err(); err != nil {
 		return docker.CreateOptions{}, "", err
 	}
+	agents, err := agent.Load(opts.DataDir)
+	if err != nil {
+		return docker.CreateOptions{}, "", err
+	}
+	script, launcher, err := agentScript(opts.DataDir)
+	if err != nil {
+		return docker.CreateOptions{}, "", err
+	}
 	if opts.Agent == "workspace" {
 		if opts.Image == "" {
 			opts.Image = agent.DefaultImage
 		}
 		create := docker.CreateOptions{
-			Image: opts.Image, Name: opts.Name, Entrypoint: "hewitt-agent",
+			Image: opts.Image, Name: opts.Name, Entrypoint: launcher,
 			Command: []string{"run"}, Workdir: "/tmp",
 			DisableLogs: operation != "run",
 			User:        fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
@@ -606,38 +630,29 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 		if err != nil {
 			return docker.CreateOptions{}, "", err
 		}
-		create.Mounts = []docker.BindMount{{Source: tools, Target: toolsPath, ReadOnly: true}}
-		for _, client := range agent.Names {
-			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
-			if err != nil {
-				return docker.CreateOptions{}, "", err
-			}
-			create.Mounts = append(create.Mounts, docker.BindMount{Source: p, Target: "/hewitt/profiles/" + client})
+		create.Mounts = []docker.BindMount{{Source: tools, Target: toolsPath, ReadOnly: true}, script}
+		profiles, err := profileMounts(opts.DataDir, opts.Profile, agents.Names())
+		if err != nil {
+			return docker.CreateOptions{}, "", err
 		}
+		create.Mounts = append(create.Mounts, profiles...)
 		if err := create.Validate(); err != nil {
 			return docker.CreateOptions{}, "", err
 		}
 		return create, "", nil
 	}
-	adapter, err := agent.Lookup(opts.Agent)
+	a, err := agents.Lookup(opts.Agent)
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
 	if opts.Image == "" {
-		opts.Image = adapter.DefaultImage()
+		opts.Image = a.ImageFor()
 	}
-	inv := adapter.Run()
-	switch operation {
-	case "login":
-		inv = adapter.Login()
-	case "status":
-		inv = adapter.Status()
-	case "logout":
-		inv = adapter.Logout()
-	}
+	// RunAgent adds the command line of a run once it knows the run's
+	// credentials; hewitt-agent launch then starts it.
 	create := docker.CreateOptions{
-		Image: opts.Image, Name: opts.Name, Entrypoint: inv.Entrypoint,
-		Command: inv.Args, Env: inv.Env, Workdir: "/tmp",
+		Image: opts.Image, Name: opts.Name, Entrypoint: launcher,
+		Command: []string{"launch"}, Env: agent.ProfileEnv(agent.ProfilePath), Workdir: "/tmp",
 		DisableLogs: operation != "run",
 		DisableTTY:  operation == "status" || operation == "logout",
 		User:        fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
@@ -645,11 +660,11 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	if err := create.Validate(); err != nil {
 		return docker.CreateOptions{}, "", err
 	}
-	path, err := profile.Prepare(opts.DataDir, adapter.Name(), opts.Profile)
+	path, err := profile.Prepare(opts.DataDir, a.Name, opts.Profile)
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
-	secrets, err := profile.PrepareSecrets(opts.DataDir, adapter.Name(), opts.Profile)
+	secrets, err := profile.PrepareSecrets(opts.DataDir, a.Name, opts.Profile)
 	if err != nil {
 		return docker.CreateOptions{}, "", err
 	}
@@ -660,28 +675,40 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 	create.Mounts = []docker.BindMount{
 		{Source: path, Target: agent.ProfilePath},
 		{Source: tools, Target: toolsPath, ReadOnly: true},
+		script,
 	}
 	if operation == "run" {
-		for _, client := range agent.Names {
-			p, err := profile.Prepare(opts.DataDir, client, opts.Profile)
-			if err != nil {
-				return docker.CreateOptions{}, "", err
-			}
-			create.Mounts = append(create.Mounts, docker.BindMount{Source: p, Target: "/hewitt/profiles/" + client})
+		profiles, err := profileMounts(opts.DataDir, opts.Profile, agents.Names())
+		if err != nil {
+			return docker.CreateOptions{}, "", err
 		}
+		create.Mounts = append(create.Mounts, profiles...)
+		if err := create.Validate(); err != nil {
+			return docker.CreateOptions{}, "", err
+		}
+		return create, secrets, nil
 	}
 	// Status and logout run the native client with the saved token; runs
 	// receive it from RunAgent, as a placeholder behind a gateway.
-	if variable := adapter.TokenVariable(); variable != "" && (operation == "status" || operation == "logout") {
+	var allow []string
+	if a.Token != nil && (operation == "status" || operation == "logout") {
 		token, err := profile.TokenFile(secrets)
 		if err != nil {
 			return docker.CreateOptions{}, "", err
 		}
 		if token != "" {
 			create.EnvFiles = append(create.EnvFiles, token)
-			create.Command = agent.Invocation{Args: create.Command}.Allow(variable).Args
+			allow = []string{a.Token.Variable}
 		}
 	}
+	launch, err := a.Launch(operation, agent.LaunchOptions{Profile: agent.ProfilePath, Allow: allow})
+	if err != nil {
+		return docker.CreateOptions{}, "", err
+	}
+	if launch.Slash != "" {
+		create.Command = []string{"slash"}
+	}
+	create.Env = append(create.Env, launch.Env()...)
 	if err := create.Validate(); err != nil {
 		return docker.CreateOptions{}, "", err
 	}
@@ -691,8 +718,8 @@ func prepare(ctx context.Context, opts AgentOptions, operation string) (docker.C
 // agentToken returns how a run receives the client's saved long-lived token:
 // behind a gateway, a placeholder the gateway replaces; otherwise the token's
 // env file. Without a saved token the client uses its own login.
-func agentToken(dataDir, profileID, client string, gateway bool) (env, files []string, err error) {
-	secrets, err := profile.PrepareSecrets(dataDir, client, profileID)
+func agentToken(dataDir, profileID string, a agent.Manifest, gateway bool) (env, files []string, err error) {
+	secrets, err := profile.PrepareSecrets(dataDir, a.Name, profileID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -700,8 +727,45 @@ func agentToken(dataDir, profileID, client string, gateway bool) (env, files []s
 	if err != nil || token == "" {
 		return nil, nil, err
 	}
-	if gateway && client == "claude" {
-		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + claudePlaceholder}, nil, nil
+	if gateway && len(a.Token.Hosts) > 0 {
+		return []string{a.Token.Variable + "=" + a.Token.Placeholder}, nil, nil
 	}
 	return nil, []string{token}, nil
+}
+
+// profileMounts mounts each agent's profile at ProfilesPath/<agent>.
+func profileMounts(dataDir, profileID string, names []string) ([]docker.BindMount, error) {
+	var mounts []docker.BindMount
+	for _, name := range names {
+		p, err := profile.Prepare(dataDir, name, profileID)
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, docker.BindMount{Source: p, Target: agent.ProfilesPath + "/" + name})
+	}
+	return mounts, nil
+}
+
+// menuEnv is the environment of hewitt-agent's agent menu for names: each
+// agent's interactive run in its profile under ProfilesPath.
+func menuEnv(agents *agent.Registry, names []string, telemetry string, allow []string) ([]string, error) {
+	launches := map[string]agent.Launch{}
+	for _, name := range names {
+		a, err := agents.Lookup(name)
+		if err != nil {
+			// A workspace may name an agent whose manifest was removed since.
+			continue
+		}
+		var keep []string
+		keep = append(keep, allow...)
+		if a.Token != nil {
+			keep = append(keep, a.Token.Variable)
+		}
+		l, err := a.Launch(agent.OpRun, agent.LaunchOptions{Profile: agent.ProfilesPath + "/" + name, Telemetry: telemetry, Allow: keep})
+		if err != nil {
+			return nil, err
+		}
+		launches[name] = l
+	}
+	return agent.Pick(launches, names), nil
 }

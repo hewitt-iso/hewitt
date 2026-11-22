@@ -1,0 +1,40 @@
+# Claude Code with its own subscription login. setup-token prints a
+# long-lived OAuth token that Hewitt saves and that sessions share without
+# refresh-token rotation; behind a gateway, agents hold only a placeholder.
+version: 1
+name: claude
+binary: claude
+install:
+  script: https://claude.ai/install.sh
+  args: ["{version}"]
+  output: .local/bin/claude
+  version: stable
+env:
+  CLAUDE_CONFIG_DIR: "{profile}/claude"
+  DISABLE_AUTOUPDATER: "1"
+unset_env:
+  - ANTHROPIC_API_KEY
+  - ANTHROPIC_AUTH_TOKEN
+  - ANTHROPIC_BASE_URL
+  - CLAUDE_CODE_OAUTH_TOKEN
+  - CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+  - CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR
+  - CLAUDE_CODE_USE_BEDROCK
+  - CLAUDE_CODE_USE_VERTEX
+  - CLAUDE_CODE_USE_FOUNDRY
+commands:
+  run: []
+  login: [setup-token]
+  status: [auth, status]
+  logout: [auth, logout]
+task:
+  interactive: [--, "{prompt}"]
+  headless: [-p, --permission-mode, bypassPermissions, --, "{prompt}"]
+token:
+  variable: CLAUDE_CODE_OAUTH_TOKEN
+  placeholder: sk-ant-oat01-hewitt-gateway-managed
+  hosts: [api.anthropic.com]
+config_dir: "{profile}/claude"
+instructions: "{profile}/claude/CLAUDE.md"
+hosts: [api.anthropic.com, claude.ai, platform.claude.com, console.anthropic.com]
+herdr: claude

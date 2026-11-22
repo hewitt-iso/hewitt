@@ -64,7 +64,7 @@ esac
 	if strings.Count(calls, "container create ") != 3 || strings.Count(calls, "container start ") != 6 {
 		t.Fatalf("lifecycle = %s", calls)
 	}
-	for _, want := range []string{"--entrypoint sleep", "agent:test infinity", "HEWITT_HOST_TERMINAL=1", "hewitt-agent run claude", "hewitt-agent run shell", "/hewitt/profiles/codex", "/hewitt/profiles/claude"} {
+	for _, want := range []string{"--entrypoint sleep", "agent:test infinity", "HEWITT_HOST_TERMINAL=1", "/hewitt/agent/hewitt-agent-", " run claude", " run shell", "dst=/hewitt/agent,readonly", "/hewitt/profiles/codex", "/hewitt/profiles/claude"} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("missing %q: %s", want, calls)
 		}
