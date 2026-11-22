@@ -28,8 +28,10 @@ do not make separate API credits a prerequisite.
   Git workspaces and persist their locations before container startup. Native agent invocation and
   profile preparation already live in `agent` and `profile`. Add packages only with working behavior; do not create empty
   packages or speculative interfaces.
-- `terminal`: locate and focus existing host tmux panes or attach to their host
-  sessions. Never create panes or agent processes during attachment.
+- `terminal`: locate and focus existing host tmux and Herdr panes or attach to
+  their host sessions, show request prompts there, and name the agent to Herdr
+  through the Docker CLI's environment, never the container's. Never create
+  panes or agent processes during attachment.
 - `workspace`: host-side Git for session workspaces: volume preparation (base
   anchor, identity, credential-free origin) and bundle import into
   `hewitt/<name>/*`; legacy worktree creation and safe removal that refuses

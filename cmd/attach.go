@@ -87,9 +87,9 @@ func newAttachCommand(cfg *config.Config) *cobra.Command {
 				if workspaceID != "" && run.WorkspaceID != workspaceID {
 					continue
 				}
-				location := "host tmux"
-				if run.Terminal.Socket == "" {
-					location = "plain terminal; cannot reattach"
+				location := run.Terminal.Manager()
+				if !run.Terminal.Kept() {
+					location += "; cannot reattach"
 				}
 				targets = append(targets, target{run.ID, fmt.Sprintf("%s  %-12s  %s  (%s)", shortID(run.ID), run.Agent, run.WorkspaceName, location)})
 			}

@@ -20,7 +20,12 @@ import (
 
 // Client uses the Docker executable on PATH and the user's Docker context.
 // Its zero value is ready to use.
-type Client struct{}
+type Client struct {
+	// Env is added to the environment of the Docker CLI itself for
+	// foreground execs; the host terminal manager reads hints from it. It never
+	// reaches the container.
+	Env []string
+}
 
 // CreateOptions describes a container. Host access requires explicit mounts.
 type CreateOptions struct {
@@ -417,7 +422,12 @@ func (Client) Attach(ctx context.Context, id string, stdin io.Reader, stdout, st
 }
 
 // runTerminal shares cancellation cleanup between login and session attachment.
-func runTerminal(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) (result error) {
+func runTerminal(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
+	return runTerminalEnv(ctx, nil, stdin, stdout, stderr, args...)
+}
+
+// runTerminalEnv is runTerminal with env added to the Docker CLI's environment.
+func runTerminalEnv(ctx context.Context, env []string, stdin io.Reader, stdout, stderr io.Writer, args ...string) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -436,6 +446,9 @@ func runTerminal(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		}()
 	}
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var diagnostic bytes.Buffer
 	cmd.Stdin, cmd.Stdout = stdin, stdout
 	cmd.Stderr = io.MultiWriter(stderr, &diagnostic)

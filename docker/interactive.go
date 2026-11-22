@@ -12,7 +12,7 @@ import (
 // ExecInteractive starts a fresh process in a running workspace with extra
 // environment entries and env files. It does not start a terminal server or
 // change the container's lifecycle.
-func (Client) ExecInteractive(ctx context.Context, id string, env, envFiles, command []string, in io.Reader, out, stderr io.Writer) error {
+func (c Client) ExecInteractive(ctx context.Context, id string, env, envFiles, command []string, in io.Reader, out, stderr io.Writer) error {
 	if err := validateArgument("container ID", id); err != nil {
 		return err
 	}
@@ -43,7 +43,12 @@ func (Client) ExecInteractive(ctx context.Context, id string, env, envFiles, com
 	}
 	args = append(args, "--", id)
 	args = append(args, command...)
-	if err := runTerminal(ctx, in, out, stderr, args...); err != nil {
+	for _, entry := range c.Env {
+		if name, _, ok := strings.Cut(entry, "="); !ok || name == "" || strings.ContainsRune(entry, 0) {
+			return fmt.Errorf("invalid Docker CLI environment entry")
+		}
+	}
+	if err := runTerminalEnv(ctx, c.Env, in, out, stderr, args...); err != nil {
 		return fmt.Errorf("run in workspace %q: %w", id, err)
 	}
 	return nil

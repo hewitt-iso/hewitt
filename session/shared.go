@@ -19,6 +19,7 @@ import (
 
 	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
+	"github.com/hewitt-iso/hewitt/terminal"
 	"github.com/hewitt-iso/hewitt/workspace"
 )
 
@@ -213,7 +214,7 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if _, err := fmt.Fprintf(stderr, "Agent run: %s (%s in %s)\n", run.ID[:12], choice, m.Name); err != nil {
 		return fmt.Errorf("report agent run: %w", err)
 	}
-	if run.Terminal.Socket == "" {
+	if !run.Terminal.Kept() {
 		if err := warn(stderr, "not inside tmux: %s ends when this terminal closes and cannot be reattached (start tmux first to keep agents reattachable)", choice); err != nil {
 			return err
 		}
@@ -243,7 +244,12 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	// Requests of this launch appear where its agent waits for them.
 	watch, stopWatch := context.WithCancel(ctx)
 	go watchRequests(watch, store, m, run, stderr)
-	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
+	client := docker.Client{}
+	if !opts.Headless {
+		// Lets a terminal manager such as Herdr recognize the agent.
+		client.Env = terminal.AgentHint(run.Terminal, choice)
+	}
+	err = client.ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	stopWatch()
 	if opts.Headless && ctx.Err() != nil {
 		// Without a terminal, ending docker exec leaves the agent running.

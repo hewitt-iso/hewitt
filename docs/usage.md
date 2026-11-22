@@ -311,6 +311,14 @@ Ctrl-C stops every running agent and marks unfinished tasks canceled. A batch
 that ends without recording a result, for example after a crash, shows its
 unfinished tasks as `lost`.
 
+## Terminal managers
+
+Run Hewitt inside a terminal manager to keep agents reattachable. tmux works
+directly: requests appear as popups over the agent's pane and `hewitt attach`
+returns to it. [Herdr](integrations/herdr.md) recognizes agents in Hewitt and
+shows their state, and [Agent of Empires](integrations/aoe.md) runs them as
+custom agents.
+
 ## List sessions
 
 ```sh
