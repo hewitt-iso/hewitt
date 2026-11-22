@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -238,95 +239,36 @@ func runBatch(cmd *cobra.Command, store *session.Store, m session.Metadata, opts
 	if workspace == "" {
 		workspace = shortID(m.ID)
 	}
-	records := make([]session.TaskRecord, len(tasks))
+	b := &batchRun{batch: batch, store: store, workspaceID: m.ID, opts: opts, tasks: tasks, stderr: cmd.ErrOrStderr(), width: longestName(tasks)}
+	b.records = make([]session.TaskRecord, len(tasks))
 	for i, t := range tasks {
-		records[i] = session.TaskRecord{Name: t.name, Agent: t.agent, WorkspaceID: m.ID, Workspace: workspace, State: session.TaskQueued, Log: batch.LogPath(t.name)}
-		if err := batch.Save(records[i]); err != nil {
+		b.records[i] = session.TaskRecord{Name: t.name, Agent: t.agent, WorkspaceID: m.ID, Workspace: workspace, State: session.TaskQueued, Log: batch.LogPath(t.name)}
+		if err := batch.Save(b.records[i]); err != nil {
 			return err
 		}
 	}
-	var mu sync.Mutex // guards records and progress output
-	stderr := cmd.ErrOrStderr()
-	report := func(i int, format string, args ...any) {
-		fmt.Fprintf(stderr, "[hewitt] %-*s  %-8s  %s\n", longestName(tasks), tasks[i].name, tasks[i].agent, fmt.Sprintf(format, args...))
-	}
-	update := func(i int, change func(*session.TaskRecord)) {
-		mu.Lock()
-		defer mu.Unlock()
-		change(&records[i])
-		if err := batch.Save(records[i]); err != nil {
-			fmt.Fprintf(stderr, "[hewitt] %v\n", err)
-		}
-	}
-	if _, err := fmt.Fprintf(stderr, "[hewitt] Batch %s: %d tasks in workspace %s, %d at a time\n", batch.ID, len(tasks), workspace, min(jobs, len(tasks))); err != nil {
+	if _, err := fmt.Fprintf(b.stderr, "[hewitt] Batch %s: %d tasks in workspace %s, %d at a time\n", batch.ID, len(tasks), workspace, min(jobs, len(tasks))); err != nil {
 		return err
 	}
 	ctx := cmd.Context()
 	slots := make(chan struct{}, jobs)
 	var wg sync.WaitGroup
-	for i, t := range tasks {
+	for i := range tasks {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			select {
 			case slots <- struct{}{}:
+				b.runTask(ctx, i)
+				<-slots
 			case <-ctx.Done():
-				update(i, func(r *session.TaskRecord) { r.State = session.TaskCanceled })
-				return
-			}
-			defer func() { <-slots }()
-			log, err := os.OpenFile(batch.LogPath(t.name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-			if err != nil {
-				update(i, func(r *session.TaskRecord) { r.State, r.Exit = session.TaskFailed, 1 })
-				mu.Lock()
-				report(i, "failed: %v", err)
-				mu.Unlock()
-				return
-			}
-			defer log.Close()
-			out := &taskLog{w: log, branch: func(branch string) {
-				update(i, func(r *session.TaskRecord) { r.Branch = branch })
-				mu.Lock()
-				report(i, "branch %s", branch)
-				mu.Unlock()
-			}}
-			topts := opts
-			topts.Agent, topts.Prompt, topts.Task = t.agent, t.prompt, t.name
-			topts.Started = func(run string) { update(i, func(r *session.TaskRecord) { r.Run = run }) }
-			started := time.Now()
-			update(i, func(r *session.TaskRecord) { r.State, r.Started = session.TaskRunning, started.UTC() })
-			mu.Lock()
-			report(i, "started")
-			mu.Unlock()
-			err = session.OpenWorkspace(ctx, store, m.ID, topts, strings.NewReader(""), out, out)
-			took := time.Since(started).Round(time.Second)
-			state, exit := session.TaskDone, 0
-			var agentExit *session.AgentExitError
-			switch {
-			case ctx.Err() != nil:
-				state = session.TaskCanceled
-			case errors.As(err, &agentExit):
-				state, exit = session.TaskFailed, agentExit.Code
-			case err != nil:
-				state, exit = session.TaskFailed, 1
-				fmt.Fprintf(out, "[hewitt] %v\n", err)
-			}
-			update(i, func(r *session.TaskRecord) { r.State, r.Exit, r.Finished = state, exit, time.Now().UTC() })
-			mu.Lock()
-			defer mu.Unlock()
-			switch state {
-			case session.TaskDone:
-				report(i, "done in %s", took)
-			case session.TaskCanceled:
-				report(i, "canceled after %s", took)
-			default:
-				report(i, "failed in %s (exit %d); log: %s", took, exit, batch.LogPath(t.name))
+				b.finish(i, session.TaskCanceled, 0)
 			}
 		}()
 	}
 	wg.Wait()
 	failed := 0
-	for _, r := range records {
+	for _, r := range b.records {
 		if r.State != session.TaskDone {
 			failed++
 		}
@@ -334,8 +276,102 @@ func runBatch(cmd *cobra.Command, store *session.Store, m session.Metadata, opts
 	if failed > 0 {
 		return &BatchError{Batch: batch.ID, Failed: failed, Total: len(tasks), Workspace: workspace, Canceled: ctx.Err() != nil}
 	}
-	_, err = fmt.Fprintf(stderr, "[hewitt] Batch %s finished; hewitt sync %s imports its branches, hewitt tasks shows them\n", batch.ID, workspace)
+	_, err = fmt.Fprintf(b.stderr, "[hewitt] Batch %s finished; hewitt sync %s imports its branches, hewitt tasks shows them\n", batch.ID, workspace)
 	return err
+}
+
+// batchRun is one batch in progress. Its tasks run concurrently; mu guards
+// their records and the progress lines on stderr.
+type batchRun struct {
+	mu          sync.Mutex
+	batch       *session.Batch
+	store       *session.Store
+	workspaceID string
+	opts        session.AgentOptions
+	tasks       []batchTask
+	records     []session.TaskRecord
+	stderr      io.Writer
+	width       int
+}
+
+// runTask runs task i in the workspace and records how it ended.
+func (b *batchRun) runTask(ctx context.Context, i int) {
+	t := b.tasks[i]
+	log, err := os.OpenFile(b.batch.LogPath(t.name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		b.finish(i, session.TaskFailed, 1)
+		b.report(i, "failed: %v", err)
+		return
+	}
+	defer log.Close()
+	out := &taskLog{w: log, batch: b, task: i}
+	opts := b.opts
+	opts.Agent, opts.Prompt, opts.Task = t.agent, t.prompt, t.name
+	opts.Started = func(run string) { b.setRun(i, run) }
+	started := b.start(i)
+	b.report(i, "started")
+	err = session.OpenWorkspace(ctx, b.store, b.workspaceID, opts, strings.NewReader(""), out, out)
+	took := time.Since(started).Round(time.Second)
+	var agentExit *session.AgentExitError
+	switch {
+	case ctx.Err() != nil:
+		b.finish(i, session.TaskCanceled, 0)
+		b.report(i, "canceled after %s", took)
+	case errors.As(err, &agentExit):
+		b.finish(i, session.TaskFailed, agentExit.Code)
+		b.report(i, "failed in %s (exit %d); log: %s", took, agentExit.Code, b.batch.LogPath(t.name))
+	case err != nil:
+		fmt.Fprintf(out, "[hewitt] %v\n", err)
+		b.finish(i, session.TaskFailed, 1)
+		b.report(i, "failed in %s (exit 1); log: %s", took, b.batch.LogPath(t.name))
+	default:
+		b.finish(i, session.TaskDone, 0)
+		b.report(i, "done in %s", took)
+	}
+}
+
+func (b *batchRun) start(i int) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	b.records[i].State, b.records[i].Started = session.TaskRunning, now.UTC()
+	b.save(i)
+	return now
+}
+
+func (b *batchRun) setRun(i int, run string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.records[i].Run = run
+	b.save(i)
+}
+
+func (b *batchRun) setBranch(i int, branch string) {
+	b.mu.Lock()
+	b.records[i].Branch = branch
+	b.save(i)
+	b.mu.Unlock()
+	b.report(i, "branch %s", branch)
+}
+
+func (b *batchRun) finish(i int, state string, exit int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.records[i].State, b.records[i].Exit, b.records[i].Finished = state, exit, time.Now().UTC()
+	b.save(i)
+}
+
+// save writes record i; the caller holds mu.
+func (b *batchRun) save(i int) {
+	if err := b.batch.Save(b.records[i]); err != nil {
+		fmt.Fprintf(b.stderr, "[hewitt] %v\n", err)
+	}
+}
+
+func (b *batchRun) report(i int, format string, args ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	fmt.Fprintf(b.stderr, "[hewitt] %-*s  %-8s  %s\n", b.width, b.tasks[i].name, b.tasks[i].agent, fmt.Sprintf(format, args...))
 }
 
 func longestName(tasks []batchTask) int {
@@ -346,14 +382,15 @@ func longestName(tasks []batchTask) int {
 	return n
 }
 
-// taskLog writes an agent's output to its log and reports the branch line
+// taskLog writes an agent's output to its log and records the branch line
 // that hewitt-agent prints when it creates the task's worktree.
 type taskLog struct {
-	mu     sync.Mutex
-	w      io.Writer
-	line   []byte
-	found  bool
-	branch func(string)
+	mu    sync.Mutex
+	w     io.Writer
+	line  []byte
+	found bool
+	batch *batchRun
+	task  int
 }
 
 func (l *taskLog) Write(p []byte) (int, error) {
@@ -368,7 +405,7 @@ func (l *taskLog) Write(p []byte) (int, error) {
 			}
 			if branch, ok := strings.CutPrefix(strings.TrimSpace(string(l.line[:i])), "[hewitt] Branch "); ok {
 				l.found, l.line = true, nil
-				l.branch(branch)
+				l.batch.setBranch(l.task, branch)
 				break
 			}
 			l.line = l.line[i+1:]
