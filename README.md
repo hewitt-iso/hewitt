@@ -26,24 +26,20 @@
 
 ---
 
-Code that runs only on your machine is like handwriting: others read it with
-mistakes. A container turns it into print, the same everywhere. A coding agent
-is print that moves and tries to step off the page. **Hewitt keeps it on the
-page**: Claude Code, Codex, OpenCode, Pi, and Antigravity run in a container
-with their own Git branch, while your host, your other projects, and your
-logins stay out of reach.
+Hewitt runs Claude Code, Codex, OpenCode, Pi, and Antigravity in local
+Docker workspaces. Each agent works in its own Git worktree and branch inside
+a shared workspace volume. Your host repository stays separate; sync imports
+the resulting branches when you are ready.
 
-- **One workspace, many agents.** Agents share a container and a repository,
-  each on its own branch. Open another tmux window, pick another agent.
-- **Your repository stays yours.** The session repository lives in a Docker
-  volume; `hewitt sync` brings the branches back as `hewitt/<name>/<branch>`.
-- **Logins agents cannot steal.** Claude's token never enters the container: a
-  gateway replaces a placeholder on the way to Anthropic.
-- **Nothing sensitive without you.** An agent reaching for another agent's
-  login, a credential file, or an unlisted host waits for your decision,
-  right in its tmux pane.
-- **Native agents, native logins.** Each agent's own client and official
-  login flow, kept in a private profile.
+- **One workspace, many agents.** Matching runs reuse a container; each agent
+  gets a separate worktree and branch.
+- **Bring work back with Git.** `hewitt sync` imports workspace branches as
+  `hewitt/<name>/<branch>` in the host repository.
+- **Native logins.** Use each agent's official login flow. With the default
+  network, the gateway keeps Claude's token outside the agent container.
+- **Review suspicious requests.** Depending on the isolation level and observer
+  availability, requests for other profiles, credential files, or unlisted
+  network hosts wait for your decision.
 
 ```text
 ╭─ Hewitt: suspicious request needs approval ─────────────────────╮
@@ -107,37 +103,49 @@ keep them reattachable and to answer requests in their panes.
 
 ## How it works
 
+The default volume workspace keeps the host repository and the agents' working
+copies separate:
+
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#F6F5F2", "primaryTextColor": "#1B1A19", "primaryBorderColor": "#5F5C58", "lineColor": "#5F5C58", "fontFamily": "Geist, ui-sans-serif, system-ui"}}}%%
 flowchart LR
-  you["You · tmux"] -->|"hewitt run"| ws
-  subgraph docker["Docker on your machine"]
-    ws["Workspace container<br/>claude · codex · opencode<br/>one branch each"]
-    gw["Gateway<br/>token injection · allowlist"]
-    ob["Observer<br/>file access"]
-    vol[("Workspace volume<br/>session repository")]
-    ws --- vol
-    ws -->|"HTTPS"| gw
-    ob -.->|"watches"| ws
+  user["You · host terminal or tmux"] -->|"hewitt run"| cli["Hewitt CLI"]
+  host[("Host Git repository")]
+  cli -->|"create or reuse"| ws
+  host -->|"base commit and read-only Git objects"| vol
+  subgraph docker["Docker"]
+    subgraph ws["Workspace container"]
+      a["Claude process"]
+      b["Codex process"]
+    end
+    vol[("Workspace volume<br/>base checkout + agent worktrees<br/>one branch per run")]
+    a --- vol
+    b --- vol
+    gw["Gateway container"]
+    ob["Observer container<br/>when available"]
+    a -->|"HTTPS proxy"| gw
+    b -->|"HTTPS proxy"| gw
+    ob -. "monitors file access" .-> ws
   end
-  gw --> net(("Internet"))
-  gw -. "SRNA" .-> you
-  ob -. "SRNA" .-> you
-  classDef accent fill:#E4572E,stroke:#E4572E,color:#F6F5F2
-  class gw,ob accent
+  gw --> internet(("Network hosts"))
+  gw -. "host approval requests" .-> user
+  ob -. "file approval requests" .-> user
+  vol -->|"hewitt sync: Git bundle"| host
 ```
 
-1. **`hewitt run`** finds or creates the project's workspace container and
-   opens the agent in it with its own worktree and branch. Matching runs reuse
-   the container; your terminal or tmux owns the connection.
-2. **The gateway** is each session's HTTPS proxy. It holds Claude's real token
-   and swaps it in for the placeholder agents hold. At `restricted` and above it
-   passes only allowlisted hosts and asks you about the rest.
-3. **The observer** holds an agent's access to another agent's profile and to
-   credential files until you decide. It is the only privileged helper and
-   drops to your UID once attached.
-4. **`hewitt sync`** imports the branches; your host repository is only read
-   while agents work.
+1. **Run.** Hewitt finds or creates a matching workspace and starts each agent
+   as a foreground process in its own worktree and branch. Uncommitted host
+   changes are not copied. Your terminal owns the connection; host tmux makes
+   it reattachable.
+2. **Network.** On the default network, a separate gateway proxies HTTPS and
+   injects Claude's token. `shared` and `isolated` have open network access;
+   `restricted` and `hardened` hold connections to hosts outside the allowlist
+   for approval. A custom network has no Hewitt gateway.
+3. **Files.** In `isolated` and above, the observer asks before an agent opens
+   another agent's profile or a credential file. It requires Linux fanotify;
+   if it cannot attach, Hewitt warns and continues without it.
+4. **Sync.** `hewitt sync` exports a Git bundle from the volume and imports its
+   branches into the host repository. The host does not open the container's
+   repository. See [Using Hewitt](docs/usage.md) for workspace lifecycle details.
 
 ## Isolation levels
 
@@ -157,9 +165,9 @@ protects, and where it stops, is in [docs/security.md](docs/security.md).
 
 ## Suspicious requests
 
-When an agent reaches for something it should not need, Hewitt holds the
-request instead of failing silently: a **suspicious request needs approval
-(SRNA)**. It appears as a popup in the agent's own tmux pane; answer with one
+When an enabled protection encounters a request that needs a decision, Hewitt
+holds it temporarily: a **suspicious request needs approval
+(SRNA)**. In host tmux it appears as a popup in the agent's pane; answer with one
 key, or decide in batches from any terminal:
 
 ```sh
