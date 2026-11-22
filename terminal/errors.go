@@ -22,3 +22,14 @@ func (e *OtherServerError) Error() string {
 func (*OtherServerError) Hint() string {
 	return "run hewitt attach outside tmux, or from a client of that tmux server"
 }
+
+// OtherHerdrError is an agent pane in a Herdr session this process is not in.
+type OtherHerdrError struct{ Socket string }
+
+func (e *OtherHerdrError) Error() string {
+	return "agent runs in a Herdr session (" + e.Socket + ")"
+}
+
+func (*OtherHerdrError) Hint() string {
+	return "open that Herdr session and run hewitt attach from one of its panes, or pick the agent in Herdr's sidebar"
+}

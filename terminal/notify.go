@@ -17,10 +17,14 @@ var ErrNoClient = errors.New("no tmux client shows this pane")
 // Popup runs command in a popup over pane l, on a client that shows the
 // pane's session, so the user answers where the agent waits. tmux runs the
 // command through sh, so each argument is quoted. A tmux without popups
-// (before 3.2) shows message in the pane's status line instead.
+// (before 3.2) shows message in the pane's status line instead. In Herdr, the
+// command runs in a pane split below the agent's.
 func Popup(ctx context.Context, l Location, title string, command []string, message string) error {
 	if err := l.Validate(); err != nil {
 		return err
+	}
+	if l.HerdrPane != "" {
+		return herdrPrompt(ctx, l, title, command, message)
 	}
 	if l.Socket == "" {
 		return ErrNoClient
@@ -48,11 +52,7 @@ func Popup(ctx context.Context, l Location, title string, command []string, mess
 		return strconv.Itoa(max(n-2, 10))
 	}
 	width, height := size(fields[1], 88), size(fields[2], 14)
-	quoted := make([]string, len(command))
-	for i, arg := range command {
-		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
-	}
-	_, err = query(ctx, l, "display-popup", "-c", client, "-t", l.Pane, "-E", "-w", width, "-h", height, "-T", title, strings.Join(quoted, " "))
+	_, err = query(ctx, l, "display-popup", "-c", client, "-t", l.Pane, "-E", "-w", width, "-h", height, "-T", title, shellQuote(command))
 	if err == nil {
 		return nil
 	}

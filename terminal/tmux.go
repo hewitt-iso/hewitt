@@ -15,13 +15,38 @@ import (
 	"golang.org/x/term"
 )
 
-// Location identifies a pane in a host tmux server. Empty means a plain terminal.
+// Location identifies a pane in a host tmux server or a Herdr session. Empty
+// means a plain terminal.
 type Location struct {
 	Socket string `json:"socket,omitempty"`
 	Pane   string `json:"pane,omitempty"`
+	// HerdrSocket and HerdrPane locate a pane of a Herdr session.
+	HerdrSocket string `json:"herdr_socket,omitempty"`
+	HerdrPane   string `json:"herdr_pane,omitempty"`
+}
+
+// Kept reports whether a terminal manager holds the pane, so it outlives the
+// terminal window and can be returned to.
+func (l Location) Kept() bool { return l.Socket != "" || l.HerdrPane != "" }
+
+// Manager names what holds the pane, for listings.
+func (l Location) Manager() string {
+	switch {
+	case l.HerdrPane != "":
+		return "herdr"
+	case l.Socket != "":
+		return "host tmux"
+	}
+	return "plain terminal"
 }
 
 func (l Location) Validate() error {
+	if l.HerdrSocket != "" || l.HerdrPane != "" {
+		if l.Socket != "" || l.Pane != "" {
+			return fmt.Errorf("invalid terminal location: both tmux and Herdr")
+		}
+		return validHerdr(l.HerdrSocket, l.HerdrPane)
+	}
 	if l.Socket == "" && l.Pane == "" {
 		return nil
 	}
@@ -34,10 +59,14 @@ func (l Location) Validate() error {
 	return nil
 }
 
+// Current locates the pane this process runs in. Herdr removes tmux markers
+// from its panes, so TMUX set inside a Herdr pane means a tmux started there,
+// which is the closer pane.
 func Current() (Location, error) {
 	value := os.Getenv("TMUX")
 	if value == "" {
-		return Location{}, nil
+		l, _ := currentHerdr()
+		return l, l.Validate()
 	}
 	// TMUX ends with ,server-pid,session-index; socket paths can contain commas.
 	for range 2 {
@@ -67,6 +96,9 @@ func query(ctx context.Context, l Location, args ...string) (string, error) {
 func Focus(ctx context.Context, l Location, in io.Reader, out, stderr io.Writer) (result error) {
 	if err := l.Validate(); err != nil {
 		return err
+	}
+	if l.HerdrPane != "" {
+		return focusHerdr(ctx, l)
 	}
 	if l.Socket == "" {
 		return &NotReattachableError{}

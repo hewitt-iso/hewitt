@@ -19,6 +19,7 @@ import (
 
 	"github.com/hewitt-iso/hewitt/agent"
 	"github.com/hewitt-iso/hewitt/docker"
+	"github.com/hewitt-iso/hewitt/terminal"
 	"github.com/hewitt-iso/hewitt/workspace"
 )
 
@@ -188,6 +189,14 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	if opts.Prompt != "" && !slices.Contains(agent.TaskAgents, choice) {
 		return fmt.Errorf("%s does not accept a task yet (tasks work with %s); start it without -p", choice, strings.Join(agent.TaskAgents, ", "))
 	}
+	if opts.Task != "" {
+		if err := ValidTaskName(opts.Task); err != nil {
+			return err
+		}
+		if opts.Prompt == "" {
+			return fmt.Errorf("task %s has no prompt", opts.Task)
+		}
+	}
 	if choice != "workspace" && choice != "shell" {
 		// The workspace mounts the tool cache read-only; install before exec.
 		if err := ensureTool(ctx, opts.DataDir, m.Image, choice, stderr); err != nil {
@@ -199,10 +208,13 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 		return fmt.Errorf("track agent connection: %w", err)
 	}
 	defer release()
+	if opts.Started != nil {
+		opts.Started(run.ID)
+	}
 	if _, err := fmt.Fprintf(stderr, "Agent run: %s (%s in %s)\n", run.ID[:12], choice, m.Name); err != nil {
 		return fmt.Errorf("report agent run: %w", err)
 	}
-	if run.Terminal.Socket == "" {
+	if !run.Terminal.Kept() {
 		if err := warn(stderr, "not inside tmux: %s ends when this terminal closes and cannot be reattached (start tmux first to keep agents reattachable)", choice); err != nil {
 			return err
 		}
@@ -221,6 +233,9 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	}
 	if opts.Prompt != "" {
 		env = append(env, "HEWITT_PROMPT_B64="+base64.StdEncoding.EncodeToString([]byte(opts.Prompt)))
+		if opts.Task != "" {
+			env = append(env, "HEWITT_TASK="+opts.Task)
+		}
 		if opts.Headless {
 			// Without a terminal the agent prints its result and exits.
 			env, in = append(env, "HEWITT_HEADLESS=1"), strings.NewReader("")
@@ -229,8 +244,21 @@ func OpenWorkspace(ctx context.Context, store *Store, id string, opts AgentOptio
 	// Requests of this launch appear where its agent waits for them.
 	watch, stopWatch := context.WithCancel(ctx)
 	go watchRequests(watch, store, m, run, stderr)
-	err = (docker.Client{}).ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
+	client := docker.Client{}
+	if !opts.Headless {
+		// Lets a terminal manager such as Herdr recognize the agent.
+		client.Env = terminal.AgentHint(run.Terminal, choice)
+	}
+	err = client.ExecInteractive(ctx, m.ID, env, files, command, in, out, stderr)
 	stopWatch()
+	if opts.Headless && ctx.Err() != nil {
+		// Without a terminal, ending docker exec leaves the agent running.
+		stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		if serr := stopRun(stop, m.ID, run.ID); serr != nil {
+			_ = warn(stderr, "could not stop %s in workspace %s: %v", choice, m.Name, serr)
+		}
+		cancel()
+	}
 	var exit *exec.ExitError
 	if ctx.Err() == nil && errors.As(err, &exit) {
 		err = &AgentExitError{Agent: choice, Workspace: m.Name, Code: exit.ExitCode(), Err: err}

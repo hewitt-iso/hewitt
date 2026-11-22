@@ -213,13 +213,19 @@ func (s *Store) Abort(ctx context.Context, r SessionRequest) error {
 	if r.Run == "" {
 		return &UnattributedRequestError{Number: r.Number}
 	}
-	_, err := (docker.Client{}).Exec(ctx, r.SessionID, []string{"sh", "-c", abortScript, "sh", r.Run})
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 3 {
-		return nil // the connection had already ended
-	}
-	if err != nil {
+	if err := stopRun(ctx, r.SessionID, r.Run); err != nil {
 		return fmt.Errorf("request #%d denied; stop %s: %w", r.Number, r.Agent, err)
 	}
 	return nil
+}
+
+// stopRun kills the processes of one agent connection in its workspace
+// container. A connection that already ended is not an error.
+func stopRun(ctx context.Context, workspaceID, run string) error {
+	_, err := (docker.Client{}).Exec(ctx, workspaceID, []string{"sh", "-c", abortScript, "sh", run})
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 3 {
+		return nil
+	}
+	return err
 }
