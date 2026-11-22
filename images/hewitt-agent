@@ -181,7 +181,8 @@ create_worktree_if_needed() {
 		return 0
 	fi
 	local wt_path branch base="${HEWITT_BASE:-HEAD}"
-	local label="${choice:-agent}" n=1
+	# A batch task names its branch; Hewitt validated the name on the host.
+	local label="${HEWITT_TASK:-${choice:-agent}}" n=1
 	mkdir -p "$HEWITT_WORKTREES_DIR"
 	while :; do
 		branch="$label-$n"

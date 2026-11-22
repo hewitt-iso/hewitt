@@ -42,6 +42,10 @@ type AgentOptions struct {
 	// runs it in the agent's non-interactive mode and prints its output.
 	Prompt   string
 	Headless bool
+	// Task names a batch task: its agent works on a branch named after it.
+	// Started, when set, receives the launch's run ID once it is recorded.
+	Task    string
+	Started func(run string)
 }
 
 // RunAgent prepares a shared workspace container for volume runs, or starts a

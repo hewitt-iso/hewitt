@@ -278,6 +278,39 @@ the default volume workspace. A task reaches the container base64-encoded in
 the launch's environment, never on a command line, and is limited to 96 KiB;
 put longer material in a file in the repository and refer to it.
 
+### Batches of tasks
+
+`hewitt batch` runs a set of task files headless in parallel in the project's
+workspace. Each task is a Markdown file: its body is the prompt, its file name
+names the branch, and optional front matter chooses the agent:
+
+```markdown
+---
+agent: codex
+---
+Fix the flaky test in api/ and commit the fix.
+```
+
+```sh
+hewitt batch                          # every tasks/*.md, 4 agents at a time
+hewitt batch tasks/fix-*.md -j 8      # chosen files, 8 at a time
+hewitt batch --agent claude tasks/    # agent for tasks that name none
+hewitt tasks                          # the latest batch: agent, branch, state, time
+hewitt tasks 20261122-153000 fix-test # print one task's log
+hewitt sync                           # import the finished branches
+```
+
+A task's agent comes from its front matter, then `--agent`, then `agent` in
+`hewitt.yml`. `tasks/Fix Flaky_Test.md` works on branch `fix-flaky-test-1`.
+Each agent runs as with `hewitt run <agent> --headless`; its output goes to a
+private log under `<data_dir>/tasks/<batch>/`, and the terminal shows one line
+per start, branch, and result. `hewitt tasks` shows a task waiting on a
+suspicious request as `SRNA (n)`; in tmux, the request also appears as a popup
+in the pane that started the batch. `batch` exits nonzero when a task fails;
+Ctrl-C stops every running agent and marks unfinished tasks canceled. A batch
+that ends without recording a result, for example after a crash, shows its
+unfinished tasks as `lost`.
+
 ## List sessions
 
 ```sh
@@ -375,6 +408,8 @@ processes in a workspace, and `rm` removes a stopped session and all its resourc
 | --- | --- |
 | `hewitt run [agent]` | Open a new agent in a shared workspace container and volume |
 | `hewitt shell` | Open a shell in the workspace base checkout |
+| `hewitt batch [files or directories]` | Run task files headless in parallel, each on a branch named after its task |
+| `hewitt tasks [batch [task]]` | Show a batch's tasks, or print one task's log |
 | `hewitt sync [session]` | Import a session's branches as `hewitt/<name>/<branch>` |
 | `hewitt stop [session]` | Stop a session and print its full ID |
 | `hewitt rm [session]` | Sync, then remove a stopped session and its volume/resources (`--force` discards uncommitted work), and print its full ID |

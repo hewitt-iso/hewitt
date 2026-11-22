@@ -482,3 +482,10 @@ func (s settings) directMounts() ([]docker.BindMount, string, error) {
 	}
 	return mounts, root, nil
 }
+
+// DefaultAgent is the agent that a run without one starts: the agent of
+// hewitt.yml, or "workspace" when the project names none.
+func DefaultAgent(opts AgentOptions) (string, error) {
+	s, err := mergeSettings(opts)
+	return s.Agent, err
+}

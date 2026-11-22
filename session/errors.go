@@ -23,6 +23,12 @@ func (*RequestNotFoundError) Hint() string {
 	return "hewitt requests -a lists requests of all sessions"
 }
 
+// BatchNotFoundError means no batch with ID was started.
+type BatchNotFoundError struct{ ID string }
+
+func (e *BatchNotFoundError) Error() string { return fmt.Sprintf("no batch %q", e.ID) }
+func (*BatchNotFoundError) Hint() string    { return "hewitt tasks --all lists every batch" }
+
 // UnattributedRequestError is a request that carried no agent connection, so
 // abort could deny it but stop no agent.
 type UnattributedRequestError struct{ Number int }

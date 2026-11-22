@@ -67,6 +67,6 @@ func NewRootCommand(version string) *cobra.Command {
 	auth.AddCommand(newAgentCommand("login", &cfg), newAgentCommand("status", &cfg), newAgentCommand("logout", &cfg), newAgentCommand("relogin", &cfg))
 	cmd.AddCommand(auth, newPSCommand(&cfg), newAttachCommand(&cfg), newTrustCommand(&cfg), newGatewayCommand(),
 		newRequestsCommand(&cfg), newDecideCommand(&cfg, "approve"), newDecideCommand(&cfg, "deny"), newDecideCommand(&cfg, "abort"), newObserveCommand(),
-		newSRNAPromptCommand(), newStatusCommand(&cfg))
+		newSRNAPromptCommand(), newStatusCommand(&cfg), newBatchCommand(&cfg), newTasksCommand(&cfg))
 	return cmd
 }
